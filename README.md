@@ -47,8 +47,8 @@ const User = z.object({
 const result = parse(User, `{name: "John", age: "25", active: "yes"}`);
 
 // result.success === true
-// result.data.value === { name: "John", age: 25, active: true }
-// result.data.flags === ["json_repaired", "string_to_number", "string_to_bool"]
+// result.data === { name: "John", age: 25, active: true }
+// result.flags === ["json_repaired", "string_to_number", "string_to_bool"]
 ```
 
 ## Installation
@@ -69,8 +69,8 @@ Parse and coerce input to match schema. Returns a result object.
 const result = parse(UserSchema, rawInput);
 
 if (result.success) {
-  console.log(result.data.value); // typed as z.infer<typeof UserSchema>
-  console.log(result.data.flags); // what transformations happened
+  console.log(result.data); // typed as z.infer<typeof UserSchema>
+  console.log(result.flags); // what transformations happened
 } else {
   console.log(result.error); // what went wrong
 }
@@ -131,7 +131,7 @@ Every transformation is tracked. Use flags to:
 ```ts
 const result = parse(Schema, input);
 if (result.success) {
-  for (const flag of result.data.flags) {
+  for (const flag of result.flags) {
     console.log(flag);
     // { flag: "string_to_number" }
     // { flag: "extra_keys_ignored", keys: ["confidence"] }
