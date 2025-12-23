@@ -1,0 +1,61 @@
+{
+  "name": "@hoangvu12/yomi",
+  "version": "0.1.0",
+  "description": "Yomi (読み) - Flexible JSON parser that interprets LLM output to match Zod schemas",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "lint": "eslint src --ext .ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest",
+    "prepublishOnly": "bun run build"
+  },
+  "keywords": [
+    "json",
+    "parser",
+    "llm",
+    "zod",
+    "coerce",
+    "schema",
+    "ai",
+    "openai",
+    "anthropic",
+    "structured-output"
+  ],
+  "author": "hoangvu12",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hoangvu12/yomi.git"
+  },
+  "homepage": "https://github.com/hoangvu12/yomi#readme",
+  "bugs": {
+    "url": "https://github.com/hoangvu12/yomi/issues"
+  },
+  "dependencies": {
+    "jsonrepair": "^3.8.0"
+  },
+  "peerDependencies": {
+    "zod": "^3.20.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "typescript": "^5.3.0",
+    "vitest": "^2.0.0",
+    "eslint": "^8.56.0",
+    "@typescript-eslint/eslint-plugin": "^6.0.0",
+    "@typescript-eslint/parser": "^6.0.0",
+    "zod": "^3.23.8"
+  },
+  "files": [
+    "dist"
+  ],
+  "license": "MIT"
+}
