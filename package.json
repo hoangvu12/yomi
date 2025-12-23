@@ -1,6 +1,6 @@
 {
   "name": "@hoangvu12/yomi",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "Yomi (読み) - Flexible JSON parser that interprets LLM output to match Zod schemas",
   "type": "module",
   "main": "./dist/index.js",
@@ -43,7 +43,7 @@
     "jsonrepair": "^3.8.0"
   },
   "peerDependencies": {
-    "zod": "^3.20.0"
+    "zod": "^4.0.0"
   },
   "devDependencies": {
     "@types/node": "^20.10.0",
@@ -52,7 +52,7 @@
     "eslint": "^8.56.0",
     "@typescript-eslint/eslint-plugin": "^6.0.0",
     "@typescript-eslint/parser": "^6.0.0",
-    "zod": "^3.23.8"
+    "zod": "^4.0.0"
   },
   "files": [
     "dist"

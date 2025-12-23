@@ -2,6 +2,13 @@
 
 **Yomi** (pronounced "yoh-mee", 読み) means "reading" or "interpretation" in Japanese. This library interprets messy LLM output and coerces it to match your Zod schemas.
 
+## Version Compatibility
+
+| Yomi Version | Zod Version | Notes |
+|--------------|-------------|-------|
+| 1.x | ^4.0.0 | Zod v4 support with new instanceof-based type checking |
+| 0.x | ^3.20.0 | Zod v3 support (legacy) |
+
 ## The Problem
 
 LLMs don't return perfect JSON. They return:
@@ -184,7 +191,7 @@ LLM Output (string)
      Result<T>
 ```
 
-The coercer recursively walks your Zod schema using `schema._def`, dispatching to type-specific coercion functions. Each coercer tries to interpret the input value as the expected type, recording flags when transformations occur.
+The coercer recursively walks your Zod schema using `instanceof` checks (Zod v4) to identify schema types, dispatching to type-specific coercion functions. Each coercer tries to interpret the input value as the expected type, recording flags when transformations occur.
 
 ## License
 
