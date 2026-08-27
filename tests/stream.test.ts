@@ -10,6 +10,57 @@ const Profile = z.object({
 });
 
 describe("createStreamParser", () => {
+  it("wraps configured paths with honest pending, incomplete, and complete state", () => {
+    const schema = z.object({ message: z.string().nullable(), meta: z.object({ label: z.string() }).optional() });
+    const stream = createStreamParser(schema, {
+      fields: { message: { withState: true }, meta: { withState: true }, "meta.label": { withState: true } },
+    });
+
+    const pending = stream.push("{");
+    expect(pending.success && pending.snapshot.data).toEqual({
+      message: { value: undefined, state: "pending" },
+      meta: { value: { label: { value: undefined, state: "pending" } }, state: "pending" },
+    });
+    const incomplete = stream.push('\"message\":\"hel');
+    expect(incomplete.success && incomplete.snapshot.data).toMatchObject({
+      message: { value: "hel", state: "incomplete" },
+    });
+    const explicitNull = createStreamParser(schema, { fields: { message: { withState: true } } });
+    const complete = explicitNull.push('{"message":null}');
+    expect(complete.success && complete.snapshot.data).toEqual({ message: { value: null, state: "complete" } });
+  });
+
+  it("freezes revisions and reuses a revision for a semantic duplicate", () => {
+    const stream = createStreamParser(z.object({ text: z.string() }), { fields: { text: { withState: true } } });
+    const first = stream.push('{"text":"done"}');
+    const duplicate = stream.push("");
+    expect(first.success && first.snapshot.revision).toBe(1);
+    expect(duplicate.success && duplicate.snapshot.revision).toBe(1);
+    if (first.success && duplicate.success) {
+      expect(duplicate.snapshot).toBe(first.snapshot);
+      expect(Object.isFrozen(first.snapshot)).toBe(true);
+      expect(Object.isFrozen(first.snapshot.data)).toBe(true);
+    }
+  });
+
+  it("does not let a state wrapper bypass parent gating", () => {
+    const stream = createStreamParser(z.object({ card: z.object({ kind: z.literal("note"), body: z.string() }) }), {
+      fields: { "card.kind": { withState: true, requiredForParent: true } },
+    });
+    const hidden = stream.push('{"card":{"body":"draft","kind":"no');
+    expect(hidden.success && hidden.snapshot.data).toEqual({});
+  });
+
+  it("retains pending atomic collection positions when elements are state wrapped", () => {
+    const stream = createStreamParser(z.object({ values: z.array(z.number()) }), {
+      fields: { "values.*": { withState: true } },
+    });
+    const update = stream.push('{"values":[1,2');
+    expect(update.success && update.snapshot.data).toEqual({ values: [
+      { value: 1, state: "complete" },
+      { value: undefined, state: "incomplete" },
+    ] });
+  });
   it("withholds atomic scalars until their emitted token boundary", () => {
     const schema = z.object({
       number: z.number(),
