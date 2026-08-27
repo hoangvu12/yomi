@@ -93,6 +93,33 @@ Skip JSON parsing, just do schema coercion on an already-parsed value.
 const result = coerce(UserSchema, { name: "John", age: "25" });
 ```
 
+### Streaming
+
+Use `createStreamParser` when you receive provider chunks yourself. Each successful
+`push()` returns the latest schema-aligned `DeepPartial<T>` snapshot. Missing required
+fields are tolerated while streaming; `finish()` is the strict validation boundary.
+
+```ts
+import { createStreamParser } from "@hoangvu12/yomi";
+
+const stream = createStreamParser(User);
+
+for await (const chunk of llmTextChunks) {
+  const update = stream.push(chunk); // string or Uint8Array
+  if (update.success) {
+    console.log(update.snapshot.data); // DeepPartial<User>
+  }
+}
+
+const final = stream.finish(); // ParseResult<User>
+if (!final.success) console.error(final.error);
+```
+
+For a provider-agnostic async iterable, `parseStream(schema, chunks)` yields the same
+snapshots. Yomi reparses the cumulative response on each chunk, which keeps the API
+portable and deterministic. For very high token counts, batch small token deltas before
+calling `push()` to avoid unnecessary repeated work.
+
 ## What It Fixes
 
 ### JSON Parsing

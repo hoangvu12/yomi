@@ -31,6 +31,7 @@ export function coerceUnion<T>(
   for (const coercer of coercers) {
     const tempCtx = createContext();
     tempCtx.path = ctx.path;
+    tempCtx.partial = ctx.partial;
 
     const result = coercer(value, tempCtx);
 

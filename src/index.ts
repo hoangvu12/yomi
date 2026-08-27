@@ -8,6 +8,14 @@ import { Flag, type FlagWithContext } from "./flags.js";
 export { Flag, type FlagWithContext } from "./flags.js";
 export { type CoerceResult, type CoerceSuccess, type CoerceFailure, type CoerceError } from "./types.js";
 export { JsonParseError } from "./parse.js";
+export {
+  createStreamParser,
+  parseStream,
+  type DeepPartial,
+  type StreamParser,
+  type StreamPushResult,
+  type StreamSnapshot,
+} from "./stream.js";
 
 /**
  * Parse result from the main parse function.
@@ -20,7 +28,7 @@ export type ParseResult<T> =
  * Error from parsing.
  */
 export interface ParseError {
-  type: "json_parse_error" | "coercion_error";
+  type: "json_parse_error" | "coercion_error" | "zod_validation_error";
   message: string;
   path?: (string | number)[];
   expected?: string;
@@ -77,9 +85,23 @@ export function parse<T extends z.ZodTypeAny>(
   const result = coerceToSchema(schema, parsed, ctx);
 
   if (result.success) {
+    const validated = schema.safeParse(result.value);
+    if (!validated.success) {
+      const issue = validated.error.issues[0];
+      return {
+        success: false,
+        error: {
+          type: "zod_validation_error",
+          message: issue?.message ?? "Zod validation failed",
+          path: issue?.path.map(String),
+          expected: issue?.code,
+          received: typeof result.value,
+        },
+      };
+    }
     return {
       success: true,
-      data: result.value,
+      data: validated.data,
       flags: result.flags,
     };
   }
@@ -134,7 +156,20 @@ export function coerce<T extends z.ZodTypeAny>(
   schema: T,
   value: unknown
 ): CoerceResult<z.infer<T>> {
-  return coerceToSchema(schema, value);
+  const result = coerceToSchema(schema, value);
+  if (!result.success) return result;
+  const validated = schema.safeParse(result.value);
+  if (validated.success) return { ...result, value: validated.data };
+  const issue = validated.error.issues[0];
+  return {
+    success: false,
+    error: {
+      message: issue?.message ?? "Zod validation failed",
+      path: issue?.path.map((part) => typeof part === "symbol" ? part.description ?? String(part) : part) ?? [],
+      expected: issue?.code ?? "valid value",
+      received: typeof result.value,
+    },
+  };
 }
 
 /**

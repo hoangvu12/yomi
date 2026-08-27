@@ -32,6 +32,16 @@ export function coerceToSchema<T extends z.ZodTypeAny>(
   return coerceZodType(schema, value, context) as CoerceResult<z.infer<T>>;
 }
 
+/** @internal Coerce a repairable streaming snapshot, tolerating missing fields. */
+export function coercePartialToSchema<T extends z.ZodTypeAny>(
+  schema: T,
+  value: unknown,
+  ctx: CoerceContext
+): CoerceResult<unknown> {
+  ctx.partial = true;
+  return coerceZodType(schema, value, ctx);
+}
+
 /**
  * Zod v4 removed ZodFirstPartyTypeKind enum, so we use instanceof checks instead.
  * Type assertions are needed because v4's internal $ZodType doesn't match public ZodType.
@@ -194,12 +204,10 @@ function coerceZodType(
   }
 
   if (schema instanceof z.ZodPipe) {
-    // v4 renamed ZodPipeline to ZodPipe
+    // Coerce only the input side. The public validation boundary executes the
+    // complete pipe exactly once, including refinements and transforms.
     const inSchema = schema.in as z.ZodTypeAny;
-    const outSchema = schema.out as z.ZodTypeAny;
-    const inResult = coerceZodType(inSchema, value, ctx);
-    if (!inResult.success) return inResult;
-    return coerceZodType(outSchema, inResult.value, ctx);
+    return coerceZodType(inSchema, value, ctx);
   }
 
   if (schema instanceof z.ZodReadonly) {

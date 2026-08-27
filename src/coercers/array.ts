@@ -97,7 +97,7 @@ export function coerceTuple<T extends unknown[]>(
     return failure("Expected tuple (array), got " + describeType(value), ctx, "tuple", describeType(value));
   }
 
-  if (value.length !== elementCoercers.length) {
+  if ((!ctx.partial && value.length !== elementCoercers.length) || value.length > elementCoercers.length) {
     return failure(
       `Expected tuple of length ${elementCoercers.length}, got length ${value.length}`,
       ctx,

@@ -55,6 +55,9 @@ export function coerceObject<T extends Record<string, unknown>>(
     const inputValue = value[key];
 
     if (!(key in value) || inputValue === undefined) {
+      if (ctx.partial) {
+        continue;
+      }
       if (propSchema.optional) {
         if ("default" in propSchema) {
           ctx.flags.push({ flag: Flag.DefaultUsed });

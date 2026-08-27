@@ -41,6 +41,8 @@ export interface CoerceContext {
   path: (string | number)[];
   /** Accumulated flags */
   flags: FlagWithContext[];
+  /** Allow structurally incomplete containers while an LLM response is streaming. */
+  partial?: boolean;
 }
 
 /**
@@ -57,6 +59,7 @@ export function childContext(ctx: CoerceContext, segment: string | number): Coer
   return {
     path: [...ctx.path, segment],
     flags: ctx.flags, // Share flags array
+    partial: ctx.partial,
   };
 }
 

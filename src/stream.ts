@@ -1,0 +1,120 @@
+import type { z } from "zod";
+import { coercePartialToSchema, coerceToSchema } from "./coerce.js";
+import { JsonParseError, parseJson } from "./parse.js";
+import { createContext, type CoerceError } from "./types.js";
+import type { FlagWithContext } from "./flags.js";
+import type { ParseResult } from "./index.js";
+
+export type DeepPartial<T> =
+  T extends readonly (infer U)[] ? DeepPartial<U>[] :
+  T extends object ? { [K in keyof T]?: DeepPartial<T[K]> } : T;
+
+export interface StreamSnapshot<T> {
+  data: DeepPartial<T>;
+  flags: FlagWithContext[];
+  /** Always false for push snapshots; only finish() can establish completeness. */
+  done: false;
+  text: string;
+}
+
+export type StreamPushResult<T> =
+  | { success: true; snapshot: StreamSnapshot<T> }
+  | { success: false; pending: true; error?: CoerceError };
+
+export interface StreamParser<T> {
+  push(chunk: string | Uint8Array): StreamPushResult<T>;
+  finish(): ParseResult<T>;
+  readonly text: string;
+}
+
+/**
+ * Incrementally interprets cumulative LLM text as schema-aligned snapshots.
+ * A push may be pending when no meaningful root value is repairable yet.
+ * finish() always runs Yomi's strict, final parser and is the validation boundary.
+ */
+export function createStreamParser<S extends z.ZodTypeAny>(
+  schema: S
+): StreamParser<z.infer<S>> {
+  let buffer = "";
+  const decoder = new TextDecoder();
+
+  return {
+    get text() { return buffer; },
+    push(chunk) {
+      buffer += typeof chunk === "string" ? chunk : decoder.decode(chunk, { stream: true });
+      try {
+        const parsed = parseJson(buffer);
+        const ctx = createContext();
+        ctx.flags.push(...parsed.flags);
+        const result = coercePartialToSchema(schema, parsed.value, ctx);
+        if (!result.success) return { success: false, pending: true, error: result.error };
+        return {
+          success: true,
+          snapshot: {
+            data: result.value as DeepPartial<z.infer<S>>,
+            flags: result.flags,
+            done: false,
+            text: buffer,
+          },
+        };
+      } catch {
+        return { success: false, pending: true };
+      }
+    },
+    finish() {
+      buffer += decoder.decode();
+      try {
+        const parsed = parseJson(buffer);
+        const ctx = createContext();
+        ctx.flags.push(...parsed.flags);
+        const result = coerceToSchema(schema, parsed.value, ctx);
+        if (result.success) {
+          const validated = schema.safeParse(result.value);
+          if (validated.success) {
+            return { success: true, data: validated.data, flags: result.flags };
+          }
+          const issue = validated.error.issues[0];
+          return {
+            success: false,
+            error: {
+              type: "zod_validation_error",
+              message: issue?.message ?? "Zod validation failed",
+              path: issue?.path.map(String),
+              expected: issue?.code,
+              received: typeof result.value,
+            },
+          };
+        }
+        return {
+          success: false,
+          error: {
+            type: "coercion_error",
+            message: result.error.message,
+            path: result.error.path,
+            expected: result.error.expected,
+            received: result.error.received,
+          },
+        };
+      } catch (error) {
+        if (!(error instanceof JsonParseError)) throw error;
+        return {
+          success: false,
+          error: { type: "json_parse_error", message: error.message },
+        };
+      }
+    },
+  };
+}
+
+/** Consume any async stream of text/bytes and yield each parseable snapshot. */
+export async function* parseStream<S extends z.ZodTypeAny>(
+  schema: S,
+  chunks: AsyncIterable<string | Uint8Array>
+): AsyncGenerator<StreamSnapshot<z.infer<S>>, ParseResult<z.infer<S>>, void> {
+  const parser = createStreamParser(schema);
+  for await (const chunk of chunks) {
+    const result = parser.push(chunk);
+    if (result.success) yield result.snapshot;
+  }
+  return parser.finish();
+}
