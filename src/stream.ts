@@ -7,6 +7,7 @@ import type { ParseError, ParseResult } from "./index.js";
 import type { Diagnostic } from "./diagnostics.js";
 import { diagnosticsFromFlags, inspectValue, resolveLimits, ResourceLimitError, type ParserOptions } from "./diagnostics.js";
 import { inspectCompletion, type CompletionNode } from "./syntax.js";
+import { createSemanticProjectionState, projectStreamingValue } from "./semantic.js";
 
 export type DeepPartial<T> =
   T extends readonly (infer U)[] ? DeepPartial<U>[] :
@@ -47,6 +48,7 @@ export function createStreamParser<S extends z.ZodTypeAny>(
   let buffer = "";
   let receivedBytes = 0;
   const decoder = new TextDecoder();
+  const semanticState = createSemanticProjectionState();
 
   return {
     get text() { return buffer; },
@@ -61,9 +63,10 @@ export function createStreamParser<S extends z.ZodTypeAny>(
       try {
         const parsed = parseJson(buffer, limits);
         inspectValue(parsed.value, limits);
+        const visible = projectStreamingValue(schema, parsed.value, completion, options, semanticState);
         const ctx = createContext(limits);
         ctx.flags.push(...parsed.flags);
-        const result = coercePartialToSchema(schema, parsed.value, ctx);
+        const result = coercePartialToSchema(schema, visible, ctx);
         if (!result.success) return { success: false, pending: true, completion, error: result.error };
         return {
           success: true,

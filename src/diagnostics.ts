@@ -22,7 +22,18 @@ export interface ParserLimits {
   maxDiagnostics: number;
 }
 
-export type ParserOptions = { limits?: Partial<ParserLimits> };
+export interface StreamFieldPolicy {
+  /** Withhold the value (including containers and strings) until its lexical node is complete. */
+  reveal?: "complete";
+}
+
+export interface ParserOptions {
+  limits?: Partial<ParserLimits>;
+  /** Semantic streaming policies keyed by dot path. Use `*` for collection elements. */
+  fields?: Readonly<Record<string, StreamFieldPolicy>>;
+  /** Safe defaults hide unstable scalar tokens. */
+  atomic?: "safe-defaults" | "none";
+}
 
 export const DEFAULT_PARSER_LIMITS: Readonly<ParserLimits> = Object.freeze({
   maxInputBytes: 1_048_576,

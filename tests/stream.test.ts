@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import { createStreamParser, inspectCompletion, parse, parseStream } from "../src/index.js";
+import type { CompletionNode } from "../src/index.js";
 
 const Profile = z.object({
   name: z.string(),
@@ -9,6 +10,109 @@ const Profile = z.object({
 });
 
 describe("createStreamParser", () => {
+  it("withholds atomic scalars until their emitted token boundary", () => {
+    const schema = z.object({
+      number: z.number(),
+      boolean: z.boolean(),
+      nothing: z.null(),
+      literal: z.literal("ready"),
+      status: z.enum(["ready", "done"]),
+      date: z.date(),
+    });
+    const stream = createStreamParser(schema);
+
+    for (const [chunk, expected] of [
+      ['{"number":-1', {}],
+      ['.2e3, "boolean":tru', { number: -1200 }],
+      ['e, "nothing":nul', { number: -1200, boolean: true }],
+      ['l, "literal":"rea', { number: -1200, boolean: true, nothing: null }],
+      ['dy", "status":"rea', { number: -1200, boolean: true, nothing: null, literal: "ready" }],
+      ['dy", "date":"2026-08', { number: -1200, boolean: true, nothing: null, literal: "ready", status: "ready" }],
+    ] as const) {
+      const result = stream.push(chunk);
+      expect(result.success).toBe(true);
+      if (result.success) expect(result.snapshot.data).toEqual(expected);
+    }
+    const closed = stream.push('-27"}');
+    expect(closed.success).toBe(true);
+    if (closed.success) expect(closed.snapshot.data).toMatchObject({
+      number: -1200,
+      boolean: true,
+      nothing: null,
+      literal: "ready",
+      status: "ready",
+      date: new Date("2026-08-27"),
+    });
+  });
+
+  it("keeps strings and containers incremental unless configured complete-only", () => {
+    const schema = z.object({ title: z.string(), card: z.object({ body: z.string() }) });
+    const normal = createStreamParser(schema);
+    const growing = normal.push('{"title":"hel');
+    expect(growing.success && growing.snapshot.data).toEqual({ title: "hel" });
+
+    const guarded = createStreamParser(schema, {
+      fields: { title: { reveal: "complete" }, card: { reveal: "complete" } },
+    });
+    const hiddenTitle = guarded.push('{"title":"hello');
+    expect(hiddenTitle.success && hiddenTitle.snapshot.data).toEqual({});
+    const titleDone = guarded.push('","card":{"body":"grow');
+    expect(titleDone.success && titleDone.snapshot.data).toEqual({ title: "hello" });
+    const cardDone = guarded.push('ing"}}');
+    expect(cardDone.success && cardDone.snapshot.data).toEqual({ title: "hello", card: { body: "growing" } });
+    const final = guarded.finish();
+    expect(final.success && final.data).toEqual({ title: "hello", card: { body: "growing" } });
+  });
+
+  it("filters incomplete atomic and configured collection elements without holes", () => {
+    const numbers = createStreamParser(z.array(z.number()));
+    const partialNumber = numbers.push("[1,2");
+    expect(partialNumber.success && partialNumber.snapshot.data).toEqual([1]);
+    const completedNumber = numbers.push("]");
+    expect(completedNumber.success && completedNumber.snapshot.data).toEqual([1, 2]);
+
+    const objects = createStreamParser(z.object({ items: z.array(z.object({ name: z.string() })) }), {
+      fields: { "items.*": { reveal: "complete" } },
+    });
+    const partialObject = objects.push('{"items":[{"name":"first"},{"name":"sec');
+    expect(partialObject.success && partialObject.snapshot.data).toEqual({ items: [{ name: "first" }] });
+    const completedObject = objects.push('ond"}]}');
+    expect(completedObject.success && completedObject.snapshot.data).toEqual({ items: [{ name: "first" }, { name: "second" }] });
+  });
+
+  it("applies reveal-on-completion to a union node", () => {
+    const schema = z.object({ value: z.union([z.string(), z.object({ text: z.string() })]) });
+    const stream = createStreamParser(schema, { fields: { value: { reveal: "complete" } } });
+    const partial = stream.push('{"value":{"text":"grow');
+    expect(partial.success && partial.snapshot.data).toEqual({});
+    const complete = stream.push('ing"}}');
+    expect(complete.success && complete.snapshot.data).toEqual({ value: { text: "growing" } });
+  });
+
+  it("does not regress a completed atomic value within an attempt", () => {
+    const stream = createStreamParser(z.object({ count: z.number() }));
+    const complete = stream.push('{"count":12}');
+    expect(complete.success && complete.snapshot.data).toEqual({ count: 12 });
+    const trailingProse = stream.push(" and explanatory prose");
+    expect(trailingProse.success && trailingProse.snapshot.data).toEqual({ count: 12 });
+  });
+
+  it("never exposes incomplete atomic values under prefix replay", () => {
+    const response = '{"values":[-12.5e2,true,null],"status":"done"}';
+    const schema = z.object({ values: z.array(z.union([z.number(), z.boolean(), z.null()])), status: z.enum(["done", "pending"]) });
+    for (let end = 1; end <= response.length; end++) {
+      const prefix = response.slice(0, end);
+      const stream = createStreamParser(schema);
+      const result = stream.push(prefix);
+      if (!result.success) continue;
+      const completion = result.snapshot.completion.children as Record<string, CompletionNode> | undefined;
+      const valueNodes = completion?.values?.children as readonly CompletionNode[] | undefined;
+      const visible = result.snapshot.data.values ?? [];
+      expect(visible.length).toBe(valueNodes?.filter((node) => node.state === "complete").length ?? 0);
+      if (result.snapshot.data.status !== undefined) expect(completion?.status?.state).toBe("complete");
+    }
+  });
+
   it("emits deep partial snapshots and strictly validates at finish", () => {
     const stream = createStreamParser(Profile);
 
