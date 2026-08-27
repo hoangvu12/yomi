@@ -1,4 +1,5 @@
 import { Flag, type FlagWithContext } from "./flags.js";
+import type { AdvisoryCheck } from "./advisory.js";
 
 export type DiagnosticPhase = "syntax" | "coercion" | "validation" | "safety";
 export type DiagnosticSeverity = "info" | "warning" | "error";
@@ -26,10 +27,12 @@ export interface ParserLimits {
 
 export type UnionTieBreaker = "error" | "first";
 
-export type ParserOptions = {
+export type ParserOptions<T = unknown> = {
   limits?: Partial<ParserLimits>;
   /** How materially different equal-cost union candidates are handled. Defaults to `error`. */
   unionTieBreaker?: UnionTieBreaker;
+  /** Non-fatal checks, evaluated only after strict final Zod validation succeeds. */
+  advisoryChecks?: readonly AdvisoryCheck<T>[];
 };
 
 export const DEFAULT_PARSER_LIMITS: Readonly<ParserLimits> = Object.freeze({
@@ -52,7 +55,7 @@ export class ResourceLimitError extends Error {
   }
 }
 
-export function resolveLimits(options?: ParserOptions): ParserLimits {
+export function resolveLimits(options?: ParserOptions<any>): ParserLimits {
   const limits = { ...DEFAULT_PARSER_LIMITS, ...options?.limits };
   for (const [budget, value] of Object.entries(limits)) {
     if (!Number.isSafeInteger(value) || value < 0) {

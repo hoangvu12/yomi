@@ -4,12 +4,14 @@ import { coerceToSchema } from "./coerce.js";
 import { type CoerceResult, createContext } from "./types.js";
 import { Flag, type FlagWithContext } from "./flags.js";
 import { diagnosticsFromFlags, inspectValue, resolveLimits, ResourceLimitError, type Diagnostic, type ParserOptions } from "./diagnostics.js";
+import { runAdvisoryChecks, type AdvisoryReport } from "./advisory.js";
 
 // Re-export types and utilities
 export { Flag, type FlagWithContext } from "./flags.js";
 export { type CoerceResult, type CoerceSuccess, type CoerceFailure, type CoerceError } from "./types.js";
 export { JsonParseError } from "./parse.js";
 export { DEFAULT_PARSER_LIMITS, ResourceLimitError, type Diagnostic, type ParserLimits, type ParserOptions, type ParserBudget, type UnionTieBreaker } from "./diagnostics.js";
+export { advisoryPolicyFingerprint, type AdvisoryCheck, type AdvisoryCheckOutcome, type AdvisoryReport, type AdvisoryStatus } from "./advisory.js";
 export { inspectCompletion, type CompletionNode, type CompletionState } from "./syntax.js";
 export { compileSchema, renderFormat, schemaFingerprint, SCHEMA_CONTRACT_VERSION, type CompiledNode, type CompiledSchema, type CompileSchemaOptions, type RenderFormatResult } from "./schema.js";
 export {
@@ -25,7 +27,7 @@ export {
  * Parse result from the main parse function.
  */
 export type ParseResult<T> =
-  | { success: true; data: T; flags: FlagWithContext[]; diagnostics: Diagnostic[] }
+  | { success: true; data: T; flags: FlagWithContext[]; diagnostics: Diagnostic[]; advisory: AdvisoryReport }
   | { success: false; error: ParseError };
 
 /**
@@ -63,7 +65,7 @@ export interface ParseError {
 export function parse<T extends z.ZodTypeAny>(
   schema: T,
   input: string,
-  options?: ParserOptions
+  options?: ParserOptions<z.infer<T>>
 ): ParseResult<z.infer<T>> {
   const limits = resolveLimits(options);
   // Phase 1: Flexible JSON parsing
@@ -119,11 +121,13 @@ export function parse<T extends z.ZodTypeAny>(
         },
       };
     }
+    const advisory = runAdvisoryChecks(validated.data, options?.advisoryChecks, limits);
     return {
       success: true,
       data: validated.data,
       flags: result.flags,
-      diagnostics,
+      diagnostics: [...diagnostics, ...advisory.checks.flatMap((check) => check.diagnostic ? [check.diagnostic] : [])].slice(0, limits.maxDiagnostics),
+      advisory,
     };
   }
 
@@ -147,9 +151,10 @@ export function parse<T extends z.ZodTypeAny>(
  */
 export function parseOrThrow<T extends z.ZodTypeAny>(
   schema: T,
-  input: string
+  input: string,
+  options?: ParserOptions<z.infer<T>>,
 ): z.infer<T> {
-  const result = parse(schema, input);
+  const result = parse(schema, input, options);
 
   if (!result.success) {
     const error = result.error;
