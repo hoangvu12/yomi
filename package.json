@@ -1,6 +1,6 @@
 {
   "name": "@hoangvu12/yomi",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Yomi (読み) - Flexible JSON parser that interprets LLM output to match Zod schemas",
   "type": "module",
   "main": "./dist/index.js",

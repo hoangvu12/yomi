@@ -33,7 +33,7 @@ npm install github:hoangvu12/yomi zod
 For reproducible applications, pin a release tag or commit instead of following `main`:
 
 ```bash
-npm install github:hoangvu12/yomi#v1.0.0 zod
+npm install github:hoangvu12/yomi#v1.0.1 zod
 # or pin an exact commit
 npm install github:hoangvu12/yomi#<commit-sha> zod
 ```
