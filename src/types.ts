@@ -30,7 +30,7 @@ export type CoerceResult<T> = CoerceSuccess<T> | CoerceFailure;
  * Error that occurred during coercion.
  */
 export interface CoerceError {
-  type?: "coercion_error" | "resource_limit_error";
+  type?: "coercion_error" | "resource_limit_error" | "ambiguity_error";
   message: string;
   path: (string | number)[];
   expected: string;
@@ -51,13 +51,15 @@ export interface CoerceContext {
   partial?: boolean;
   limits?: ParserLimits;
   candidates?: number;
+  diagnostics: Diagnostic[];
+  unionTieBreaker?: import("./diagnostics.js").UnionTieBreaker;
 }
 
 /**
  * Create a new coercion context.
  */
 export function createContext(limits?: ParserLimits): CoerceContext {
-  return { path: [], flags: [], limits, candidates: 0 };
+  return { path: [], flags: [], diagnostics: [], limits, candidates: 0 };
 }
 
 /**
@@ -70,6 +72,8 @@ export function childContext(ctx: CoerceContext, segment: string | number): Coer
     partial: ctx.partial,
     limits: ctx.limits,
     candidates: ctx.candidates,
+    diagnostics: ctx.diagnostics,
+    unionTieBreaker: ctx.unionTieBreaker,
   };
 }
 
@@ -81,7 +85,7 @@ export function addFlag(ctx: CoerceContext, item: FlagWithContext): void {
  * Create a success result.
  */
 export function success<T>(value: T, ctx: CoerceContext): CoerceSuccess<T> {
-  return { success: true, value, flags: ctx.flags, diagnostics: [] };
+  return { success: true, value, flags: ctx.flags, diagnostics: ctx.diagnostics };
 }
 
 /**

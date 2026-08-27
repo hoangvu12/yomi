@@ -140,20 +140,34 @@ function coerceZodType(
     return coerceRecord(value, (v, c) => coerceZodType(valueSchema, v, c), ctx);
   }
 
-  if (schema instanceof z.ZodUnion) {
-    const options = schema.options as z.ZodTypeAny[];
-    const coercers = options.map(
-      (opt) => (v: unknown, c: CoerceContext) => coerceZodType(opt, v, c)
-    );
-    return coerceUnion(value, coercers, ctx);
-  }
-
   if (schema instanceof z.ZodDiscriminatedUnion) {
     const options = schema.options as z.ZodTypeAny[];
-    const coercers = options.map(
-      (opt) => (v: unknown, c: CoerceContext) => coerceZodType(opt, v, c)
-    );
-    return coerceUnion(value, coercers, ctx);
+    const discriminator = (schema.def as unknown as { discriminator: string }).discriminator;
+    let eligible = options.map((option, index) => ({ option, index }));
+    if (typeof value === "object" && value !== null && !Array.isArray(value)) {
+      const discriminatorValue = (value as Record<string, unknown>)[discriminator];
+      const exact = eligible.filter(({ option }) => {
+        if (!(option instanceof z.ZodObject)) return false;
+        const discriminatorSchema = (option.shape as Record<string, z.ZodTypeAny>)[discriminator];
+        return discriminatorSchema?.safeParse(discriminatorValue).success === true;
+      });
+      if (exact.length > 0) eligible = exact;
+    }
+    const candidates = eligible.map(({ option, index }) => ({
+      index,
+      coercer: (v: unknown, c: CoerceContext) => coerceZodType(option, v, c),
+      validate: (v: unknown) => option.safeParse(v),
+    }));
+    return coerceUnion(value, candidates, ctx);
+  }
+
+  if (schema instanceof z.ZodUnion) {
+    const options = schema.options as z.ZodTypeAny[];
+    const candidates = options.map((option) => ({
+      coercer: (v: unknown, c: CoerceContext) => coerceZodType(option, v, c),
+      validate: (v: unknown) => option.safeParse(v),
+    }));
+    return coerceUnion(value, candidates, ctx);
   }
 
   if (schema instanceof z.ZodOptional) {
