@@ -45,11 +45,11 @@ export enum Flag {
  * Some flags benefit from additional context for debugging.
  * ExtraKeysIgnored tells you which keys, FloatToInt shows the precision lost.
  */
-export type FlagWithContext =
+export type FlagWithContext = (
   | { flag: Flag.ExtraKeysIgnored; keys: string[] }
   | { flag: Flag.FloatToInt; original: number; rounded: number }
   | { flag: Flag.EnumCaseInsensitive; input: string; matched: string }
-  | { flag: Exclude<Flag, Flag.ExtraKeysIgnored | Flag.FloatToInt | Flag.EnumCaseInsensitive> };
+  | { flag: Exclude<Flag, Flag.ExtraKeysIgnored | Flag.FloatToInt | Flag.EnumCaseInsensitive> }) & { path?: (string | number)[] };
 
 export function flag(f: Flag): FlagWithContext {
   return { flag: f } as FlagWithContext;

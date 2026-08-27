@@ -6,6 +6,7 @@ import {
   success,
   failure,
   describeType,
+  addFlag,
 } from "../types.js";
 
 export type PropertyCoercer<T> = (value: unknown, ctx: CoerceContext) => CoerceResult<T>;
@@ -43,7 +44,7 @@ export function coerceObject<T extends Record<string, unknown>>(
     );
   }
 
-  const result: Record<string, unknown> = {};
+  const result: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
   const inputKeys = new Set(Object.keys(value));
   const schemaKeys = new Set(Object.keys(schema));
 
@@ -60,10 +61,10 @@ export function coerceObject<T extends Record<string, unknown>>(
       }
       if (propSchema.optional) {
         if ("default" in propSchema) {
-          ctx.flags.push({ flag: Flag.DefaultUsed });
+          addFlag(propCtx, { flag: Flag.DefaultUsed });
           result[key] = propSchema.default;
         } else {
-          ctx.flags.push({ flag: Flag.MissingOptionalKey });
+          addFlag(propCtx, { flag: Flag.MissingOptionalKey });
           // Leave undefined - don't add to result
         }
         continue;
@@ -84,7 +85,7 @@ export function coerceObject<T extends Record<string, unknown>>(
   // Track extra keys so callers know the LLM added unrequested fields
   if (inputKeys.size > 0) {
     const extraKeys = Array.from(inputKeys);
-    ctx.flags.push({ flag: Flag.ExtraKeysIgnored, keys: extraKeys });
+    addFlag(ctx, { flag: Flag.ExtraKeysIgnored, keys: extraKeys });
   }
 
   return success(result as T, ctx);
@@ -108,7 +109,7 @@ export function coerceRecord<T>(
     );
   }
 
-  const result: Record<string, T> = {};
+  const result: Record<string, T> = Object.create(null) as Record<string, T>;
 
   for (const [key, val] of Object.entries(value)) {
     const propCtx = childContext(ctx, key);

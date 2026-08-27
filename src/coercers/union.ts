@@ -7,7 +7,9 @@ import {
   failure,
   createContext,
   describeType,
+  addFlag,
 } from "../types.js";
+import { ResourceLimitError } from "../diagnostics.js";
 
 export type Coercer<T> = (value: unknown, ctx: CoerceContext) => CoerceResult<T>;
 
@@ -29,9 +31,15 @@ export function coerceUnion<T>(
   const errors: CoerceFailure[] = [];
 
   for (const coercer of coercers) {
+    ctx.candidates = (ctx.candidates ?? 0) + 1;
+    if (ctx.limits && ctx.candidates > ctx.limits.maxCandidates) {
+      throw new ResourceLimitError("maxCandidates", ctx.limits.maxCandidates);
+    }
     const tempCtx = createContext();
     tempCtx.path = ctx.path;
     tempCtx.partial = ctx.partial;
+    tempCtx.limits = ctx.limits;
+    tempCtx.candidates = ctx.candidates;
 
     const result = coercer(value, tempCtx);
 
@@ -53,6 +61,7 @@ export function coerceUnion<T>(
   );
 }
 
+
 /**
  * For z.optional(T), both undefined and null become undefined.
  * This bridges JSON's null with TypeScript's optional fields.
@@ -68,7 +77,7 @@ export function coerceOptional<T>(
 
   // JSON has null, TypeScript has undefined - treat them the same for optional
   if (value === null) {
-    ctx.flags.push({ flag: Flag.NullToUndefined });
+    addFlag(ctx, { flag: Flag.NullToUndefined });
     return success(undefined, ctx);
   }
 
@@ -89,7 +98,7 @@ export function coerceNullable<T>(
   }
 
   if (value === undefined) {
-    ctx.flags.push({ flag: Flag.NullToUndefined });
+    addFlag(ctx, { flag: Flag.NullToUndefined });
     return success(null, ctx);
   }
 
@@ -108,7 +117,7 @@ export function coerceDefault<T>(
   ctx: CoerceContext
 ): CoerceResult<T> {
   if (value === undefined || value === null) {
-    ctx.flags.push({ flag: Flag.DefaultUsed });
+    addFlag(ctx, { flag: Flag.DefaultUsed });
     return success(defaultValue, ctx);
   }
 
@@ -131,6 +140,6 @@ export function coerceCatch<T>(
     return result;
   }
 
-  ctx.flags.push({ flag: Flag.DefaultUsed });
+  addFlag(ctx, { flag: Flag.DefaultUsed });
   return success(catchValue, ctx);
 }

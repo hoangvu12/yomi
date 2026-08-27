@@ -3,7 +3,9 @@ import { coercePartialToSchema, coerceToSchema } from "./coerce.js";
 import { JsonParseError, parseJson } from "./parse.js";
 import { createContext, type CoerceError } from "./types.js";
 import type { FlagWithContext } from "./flags.js";
-import type { ParseResult } from "./index.js";
+import type { ParseError, ParseResult } from "./index.js";
+import type { Diagnostic } from "./diagnostics.js";
+import { diagnosticsFromFlags, inspectValue, resolveLimits, ResourceLimitError, type ParserOptions } from "./diagnostics.js";
 
 export type DeepPartial<T> =
   T extends readonly (infer U)[] ? DeepPartial<U>[] :
@@ -12,6 +14,7 @@ export type DeepPartial<T> =
 export interface StreamSnapshot<T> {
   data: DeepPartial<T>;
   flags: FlagWithContext[];
+  diagnostics: Diagnostic[];
   /** Always false for push snapshots; only finish() can establish completeness. */
   done: false;
   text: string;
@@ -19,7 +22,8 @@ export interface StreamSnapshot<T> {
 
 export type StreamPushResult<T> =
   | { success: true; snapshot: StreamSnapshot<T> }
-  | { success: false; pending: true; error?: CoerceError };
+  | { success: false; pending: true; error?: CoerceError }
+  | { success: false; pending: false; error: ParseError };
 
 export interface StreamParser<T> {
   push(chunk: string | Uint8Array): StreamPushResult<T>;
@@ -33,8 +37,10 @@ export interface StreamParser<T> {
  * finish() always runs Yomi's strict, final parser and is the validation boundary.
  */
 export function createStreamParser<S extends z.ZodTypeAny>(
-  schema: S
+  schema: S,
+  options?: ParserOptions
 ): StreamParser<z.infer<S>> {
+  const limits = resolveLimits(options);
   let buffer = "";
   const decoder = new TextDecoder();
 
@@ -43,8 +49,9 @@ export function createStreamParser<S extends z.ZodTypeAny>(
     push(chunk) {
       buffer += typeof chunk === "string" ? chunk : decoder.decode(chunk, { stream: true });
       try {
-        const parsed = parseJson(buffer);
-        const ctx = createContext();
+        const parsed = parseJson(buffer, limits);
+        inspectValue(parsed.value, limits);
+        const ctx = createContext(limits);
         ctx.flags.push(...parsed.flags);
         const result = coercePartialToSchema(schema, parsed.value, ctx);
         if (!result.success) return { success: false, pending: true, error: result.error };
@@ -53,25 +60,30 @@ export function createStreamParser<S extends z.ZodTypeAny>(
           snapshot: {
             data: result.value as DeepPartial<z.infer<S>>,
             flags: result.flags,
+            diagnostics: diagnosticsFromFlags(result.flags, limits),
             done: false,
             text: buffer,
           },
         };
-      } catch {
+      } catch (error) {
+        if (error instanceof ResourceLimitError) {
+          return { success: false, pending: false, error: { type: "resource_limit_error", message: error.message, budget: error.budget, limit: error.limit } };
+        }
         return { success: false, pending: true };
       }
     },
     finish() {
       buffer += decoder.decode();
       try {
-        const parsed = parseJson(buffer);
-        const ctx = createContext();
+        const parsed = parseJson(buffer, limits);
+        inspectValue(parsed.value, limits);
+        const ctx = createContext(limits);
         ctx.flags.push(...parsed.flags);
         const result = coerceToSchema(schema, parsed.value, ctx);
         if (result.success) {
           const validated = schema.safeParse(result.value);
           if (validated.success) {
-            return { success: true, data: validated.data, flags: result.flags };
+            return { success: true, data: validated.data, flags: result.flags, diagnostics: diagnosticsFromFlags(result.flags, limits) };
           }
           const issue = validated.error.issues[0];
           return {
@@ -96,6 +108,7 @@ export function createStreamParser<S extends z.ZodTypeAny>(
           },
         };
       } catch (error) {
+        if (error instanceof ResourceLimitError) return { success: false, error: { type: "resource_limit_error", message: error.message, budget: error.budget, limit: error.limit } };
         if (!(error instanceof JsonParseError)) throw error;
         return {
           success: false,
@@ -109,9 +122,10 @@ export function createStreamParser<S extends z.ZodTypeAny>(
 /** Consume any async stream of text/bytes and yield each parseable snapshot. */
 export async function* parseStream<S extends z.ZodTypeAny>(
   schema: S,
-  chunks: AsyncIterable<string | Uint8Array>
+  chunks: AsyncIterable<string | Uint8Array>,
+  options?: ParserOptions
 ): AsyncGenerator<StreamSnapshot<z.infer<S>>, ParseResult<z.infer<S>>, void> {
-  const parser = createStreamParser(schema);
+  const parser = createStreamParser(schema, options);
   for await (const chunk of chunks) {
     const result = parser.push(chunk);
     if (result.success) yield result.snapshot;
