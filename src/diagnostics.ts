@@ -30,6 +30,8 @@ export type UnionTieBreaker = "error" | "first";
 export interface StreamFieldPolicy {
   /** Withhold the value (including containers and strings) until its lexical node is complete. */
   reveal?: "complete";
+  /** Withhold the nearest containing object until this child is visible, non-null, and valid. */
+  requiredForParent?: boolean;
 }
 
 export type ParserOptions<T = unknown> = {

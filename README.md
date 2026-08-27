@@ -115,6 +115,20 @@ const final = stream.finish(); // ParseResult<User>
 if (!final.success) console.error(final.error);
 ```
 
+Streaming field policies use dot paths and `*` for collection elements. Set
+`reveal: "complete"` to make a value complete-only, or `requiredForParent: true`
+to withhold its containing object until that child is complete, non-null, and
+schema-valid. Policy paths are validated when the stream parser is created.
+
+```ts
+const stream = createStreamParser(Result, {
+  fields: {
+    "events.*.kind": { requiredForParent: true },
+    "events.*.payload": { reveal: "complete" },
+  },
+});
+```
+
 For a provider-agnostic async iterable, `parseStream(schema, chunks)` yields the same
 snapshots. Yomi reparses the cumulative response on each chunk, which keeps the API
 portable and deterministic. For very high token counts, batch small token deltas before
