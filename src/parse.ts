@@ -7,6 +7,11 @@ export interface ParseResult {
   flags: FlagWithContext[];
 }
 
+/** Internal instrumentation used by streaming profiles. */
+export interface ParseWork {
+  repairAttempts: number;
+}
+
 /**
  * LLM outputs are notoriously messy - they wrap JSON in markdown, add
  * explanatory text, use single quotes, leave trailing commas, etc.
@@ -14,13 +19,14 @@ export interface ParseResult {
  * We try progressively more aggressive strategies to extract valid JSON,
  * preferring minimal intervention (so we try JSON.parse first before repair).
  */
-export function parseJson(input: string, limits?: ParserLimits): ParseResult {
+export function parseJson(input: string, limits?: ParserLimits, work?: ParseWork): ParseResult {
   if (limits && new TextEncoder().encode(input).byteLength > limits.maxInputBytes) {
     throw new ResourceLimitError("maxInputBytes", limits.maxInputBytes);
   }
   let repairWork = 0;
   const spendRepair = (): void => {
     repairWork++;
+    if (work) work.repairAttempts++;
     if (limits && repairWork > limits.maxRepairWork) throw new ResourceLimitError("maxRepairWork", limits.maxRepairWork);
   };
   const trimmed = input.trim();

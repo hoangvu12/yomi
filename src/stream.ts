@@ -36,6 +36,20 @@ export interface StreamParser<T> {
   push(chunk: string | Uint8Array): StreamPushResult<T>;
   finish(): ParseResult<T>;
   readonly text: string;
+  /** Stable counters suitable for regression assertions and profiling. */
+  readonly metrics: Readonly<StreamWorkMetrics>;
+}
+
+export interface StreamWorkMetrics {
+  inputBytes: number;
+  parseAttempts: number;
+  cumulativeParsedBytes: number;
+  completionScannedCharacters: number;
+  repairAttempts: number;
+  candidateAttempts: number;
+  snapshotCount: number;
+  /** Deterministic lower-bound estimate of state retained by the parser. */
+  retainedBytes: number;
 }
 
 /**
@@ -56,9 +70,16 @@ export function createStreamParser<S extends z.ZodTypeAny>(
   let revision = 0;
   let previousSemantic: string | undefined;
   let previousSnapshot: StreamSnapshot<z.infer<S>> | undefined;
+  const work = { candidateAttempts: 0 };
+  const metrics: StreamWorkMetrics = {
+    inputBytes: 0, parseAttempts: 0, cumulativeParsedBytes: 0,
+    completionScannedCharacters: 0, repairAttempts: 0,
+    candidateAttempts: 0, snapshotCount: 0, retainedBytes: 0,
+  };
 
   return {
     get text() { return buffer; },
+    get metrics() { return Object.freeze({ ...metrics, candidateAttempts: work.candidateAttempts }); },
     push(chunk) {
       receivedBytes += typeof chunk === "string" ? new TextEncoder().encode(chunk).byteLength : chunk.byteLength;
       if (receivedBytes > limits.maxInputBytes) {
@@ -66,12 +87,17 @@ export function createStreamParser<S extends z.ZodTypeAny>(
         return { success: false, pending: false, error: { type: "resource_limit_error", message: error.message, budget: error.budget, limit: error.limit } };
       }
       buffer += typeof chunk === "string" ? chunk : decoder.decode(chunk, { stream: true });
+      metrics.inputBytes = receivedBytes;
+      metrics.retainedBytes = receivedBytes;
+      metrics.completionScannedCharacters += buffer.length;
       const completion = inspectCompletion(buffer);
       try {
-        const parsed = parseJson(buffer, limits);
+        metrics.parseAttempts++;
+        metrics.cumulativeParsedBytes += new TextEncoder().encode(buffer).byteLength;
+        const parsed = parseJson(buffer, limits, metrics);
         inspectValue(parsed.value, limits);
         const visible = projectStreamingValue(schema, parsed.value, completion, options, semanticState);
-        const ctx = createContext(limits);
+        const ctx = createContext(limits, work);
         ctx.unionTieBreaker = options?.unionTieBreaker;
         ctx.flags.push(...parsed.flags);
         const result = coercePartialToSchema(schema, visible, ctx);
@@ -88,6 +114,7 @@ export function createStreamParser<S extends z.ZodTypeAny>(
             text: buffer,
             revision: ++revision,
           });
+        metrics.snapshotCount++;
         previousSemantic = semantic;
         previousSnapshot = snapshot;
         return {
@@ -103,10 +130,13 @@ export function createStreamParser<S extends z.ZodTypeAny>(
     },
     finish() {
       buffer += decoder.decode();
+      metrics.retainedBytes = new TextEncoder().encode(buffer).byteLength;
       try {
-        const parsed = parseJson(buffer, limits);
+        metrics.parseAttempts++;
+        metrics.cumulativeParsedBytes += metrics.retainedBytes;
+        const parsed = parseJson(buffer, limits, metrics);
         inspectValue(parsed.value, limits);
-        const ctx = createContext(limits);
+        const ctx = createContext(limits, work);
         ctx.unionTieBreaker = options?.unionTieBreaker;
         ctx.flags.push(...parsed.flags);
         const result = coerceToSchema(schema, parsed.value, ctx);

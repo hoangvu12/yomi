@@ -115,6 +115,11 @@ const final = stream.finish(); // ParseResult<User>
 if (!final.success) console.error(final.error);
 ```
 
+`stream.metrics` exposes deterministic cumulative work counters (parsed bytes,
+completion scan characters, repair and union-candidate attempts, snapshots, and
+retained bytes). Use them for profiling and regression assertions; elapsed time
+and heap growth should remain informational measurements.
+
 Streaming field policies use dot paths and `*` for collection elements. Set
 `reveal: "complete"` to make a value complete-only, or `requiredForParent: true`
 to withhold its containing object until that child is complete, non-null, and

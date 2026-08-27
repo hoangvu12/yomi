@@ -30,6 +30,7 @@ export {
   type StreamParser,
   type StreamPushResult,
   type StreamSnapshot,
+  type StreamWorkMetrics,
 } from "./stream.js";
 
 /**

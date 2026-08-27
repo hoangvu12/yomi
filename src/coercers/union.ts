@@ -46,6 +46,7 @@ export function coerceUnion<T>(
   for (const [index, candidate] of candidates.entries()) {
     const candidateIndex = candidate.index ?? index;
     ctx.candidates = (ctx.candidates ?? 0) + 1;
+    if (ctx.work) ctx.work.candidateAttempts++;
     if (ctx.limits && ctx.candidates > ctx.limits.maxCandidates) {
       throw new ResourceLimitError("maxCandidates", ctx.limits.maxCandidates);
     }
@@ -54,6 +55,7 @@ export function coerceUnion<T>(
     tempCtx.partial = ctx.partial;
     tempCtx.limits = ctx.limits;
     tempCtx.candidates = ctx.candidates;
+    tempCtx.work = ctx.work;
     tempCtx.unionTieBreaker = ctx.unionTieBreaker;
     tempCtx.diagnostics = ctx.diagnostics;
 
