@@ -89,6 +89,47 @@ describe("createStreamParser", () => {
     expect(complete.success && complete.snapshot.data).toEqual({ value: { text: "growing" } });
   });
 
+  it("gates a parent on the semantically visible required child", () => {
+    const schema = z.object({ card: z.object({ kind: z.literal("note"), body: z.string() }) });
+    const stream = createStreamParser(schema, { fields: { "card.kind": { requiredForParent: true } } });
+    const absent = stream.push('{"card":{"body":"draft"');
+    expect(absent.success && absent.snapshot.data).toEqual({});
+    const incomplete = stream.push(',"kind":"no');
+    expect(incomplete.success && incomplete.snapshot.data).toEqual({});
+    const visible = stream.push('te"}}');
+    expect(visible.success && visible.snapshot.data).toEqual({ card: { kind: "note", body: "draft" } });
+  });
+
+  it("keeps nested collection parents hidden for null and all-null gates", () => {
+    const schema = z.object({ items: z.array(z.object({ identity: z.object({ primary: z.string().nullable(), secondary: z.string().nullable() }), text: z.string() })) });
+    const stream = createStreamParser(schema, { fields: { "items.*.identity": { requiredForParent: true } } });
+    const hidden = stream.push('{"items":[{"identity":{"primary":null,"secondary":null},"text":"hidden"},');
+    expect(hidden.success && hidden.snapshot.data).toEqual({ items: [] });
+    const shown = stream.push('{"identity":{"primary":"id","secondary":null},"text":"shown"}]}');
+    expect(shown.success && shown.snapshot.data).toEqual({ items: [{ identity: { primary: "id", secondary: null }, text: "shown" }] });
+  });
+
+  it("reveals only the discriminator-selected union variant", () => {
+    const schema = z.object({ event: z.discriminatedUnion("kind", [
+      z.object({ kind: z.literal("text"), text: z.string() }),
+      z.object({ kind: z.literal("image"), url: z.string() }),
+    ]) });
+    const stream = createStreamParser(schema, { fields: { "event.kind": { requiredForParent: true } } });
+    const absent = stream.push('{"event":{"text":"hello"');
+    expect(absent.success && absent.snapshot.data).toEqual({});
+    const incomplete = stream.push(',"kind":"te');
+    expect(incomplete.success && incomplete.snapshot.data).toEqual({});
+    const selected = stream.push('xt"}}');
+    expect(selected.success && selected.snapshot.data).toEqual({ event: { kind: "text", text: "hello" } });
+  });
+
+  it("validates streaming policy paths when the parser is created", () => {
+    const schema = z.object({ items: z.array(z.object({ kind: z.string() })) });
+    expect(() => createStreamParser(schema, { fields: { "items.kind": { reveal: "complete" } } })).toThrow(/does not exist/);
+    expect(() => createStreamParser(schema, { fields: { items: { requiredForParent: true } } })).not.toThrow();
+    expect(() => createStreamParser(z.array(z.string()), { fields: { "*": { requiredForParent: true } } })).toThrow(/object child/);
+  });
+
   it("does not regress a completed atomic value within an attempt", () => {
     const stream = createStreamParser(z.object({ count: z.number() }));
     const complete = stream.push('{"count":12}');

@@ -8,7 +8,7 @@ import type { Diagnostic } from "./diagnostics.js";
 import { diagnosticsFromFlags, inspectValue, resolveLimits, ResourceLimitError, type ParserOptions } from "./diagnostics.js";
 import { inspectCompletion, type CompletionNode } from "./syntax.js";
 import { runAdvisoryChecks } from "./advisory.js";
-import { createSemanticProjectionState, projectStreamingValue } from "./semantic.js";
+import { createSemanticProjectionState, projectStreamingValue, validateStreamPolicies } from "./semantic.js";
 
 export type DeepPartial<T> =
   T extends readonly (infer U)[] ? DeepPartial<U>[] :
@@ -46,6 +46,7 @@ export function createStreamParser<S extends z.ZodTypeAny>(
   options?: ParserOptions<z.infer<S>>
 ): StreamParser<z.infer<S>> {
   const limits = resolveLimits(options);
+  validateStreamPolicies(schema, options);
   let buffer = "";
   let receivedBytes = 0;
   const decoder = new TextDecoder();
