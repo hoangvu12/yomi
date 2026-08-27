@@ -3,11 +3,13 @@ import { parseJson, JsonParseError } from "./parse.js";
 import { coerceToSchema } from "./coerce.js";
 import { type CoerceResult, createContext } from "./types.js";
 import { Flag, type FlagWithContext } from "./flags.js";
+import { diagnosticsFromFlags, inspectValue, resolveLimits, ResourceLimitError, type Diagnostic, type ParserOptions } from "./diagnostics.js";
 
 // Re-export types and utilities
 export { Flag, type FlagWithContext } from "./flags.js";
 export { type CoerceResult, type CoerceSuccess, type CoerceFailure, type CoerceError } from "./types.js";
 export { JsonParseError } from "./parse.js";
+export { DEFAULT_PARSER_LIMITS, ResourceLimitError, type Diagnostic, type ParserLimits, type ParserOptions, type ParserBudget } from "./diagnostics.js";
 export {
   createStreamParser,
   parseStream,
@@ -21,18 +23,21 @@ export {
  * Parse result from the main parse function.
  */
 export type ParseResult<T> =
-  | { success: true; data: T; flags: FlagWithContext[] }
+  | { success: true; data: T; flags: FlagWithContext[]; diagnostics: Diagnostic[] }
   | { success: false; error: ParseError };
 
 /**
  * Error from parsing.
  */
 export interface ParseError {
-  type: "json_parse_error" | "coercion_error" | "zod_validation_error";
+  type: "json_parse_error" | "coercion_error" | "zod_validation_error" | "resource_limit_error";
   message: string;
   path?: (string | number)[];
   expected?: string;
   received?: string;
+  budget?: import("./diagnostics.js").ParserBudget;
+  limit?: number;
+  diagnostics?: Diagnostic[];
 }
 
 /**
@@ -55,17 +60,23 @@ export interface ParseError {
  */
 export function parse<T extends z.ZodTypeAny>(
   schema: T,
-  input: string
+  input: string,
+  options?: ParserOptions
 ): ParseResult<z.infer<T>> {
+  const limits = resolveLimits(options);
   // Phase 1: Flexible JSON parsing
   let parsed: unknown;
   let parseFlags: FlagWithContext[] = [];
 
   try {
-    const parseResult = parseJson(input);
+    const parseResult = parseJson(input, limits);
     parsed = parseResult.value;
+    inspectValue(parsed, limits);
     parseFlags = parseResult.flags;
   } catch (e) {
+    if (e instanceof ResourceLimitError) {
+      return { success: false, error: { type: "resource_limit_error", message: e.message, budget: e.budget, limit: e.limit, diagnostics: [{ code: "resource_limit_exceeded", phase: "safety", path: [], severity: "error", cost: 0 }] } };
+    }
     if (e instanceof JsonParseError) {
       return {
         success: false,
@@ -79,10 +90,16 @@ export function parse<T extends z.ZodTypeAny>(
   }
 
   // Phase 2: Schema-aligned coercion
-  const ctx = createContext();
+  const ctx = createContext(limits);
   ctx.flags.push(...parseFlags);
 
-  const result = coerceToSchema(schema, parsed, ctx);
+  let result: CoerceResult<z.infer<T>>;
+  try { result = coerceToSchema(schema, parsed, ctx); }
+  catch (e) {
+    if (e instanceof ResourceLimitError) return { success: false, error: { type: "resource_limit_error", message: e.message, budget: e.budget, limit: e.limit } };
+    throw e;
+  }
+  const diagnostics = diagnosticsFromFlags(ctx.flags, limits);
 
   if (result.success) {
     const validated = schema.safeParse(result.value);
@@ -103,6 +120,7 @@ export function parse<T extends z.ZodTypeAny>(
       success: true,
       data: validated.data,
       flags: result.flags,
+      diagnostics,
     };
   }
 
@@ -114,6 +132,7 @@ export function parse<T extends z.ZodTypeAny>(
       path: result.error.path,
       expected: result.error.expected,
       received: result.error.received,
+      diagnostics,
     },
   };
 }
@@ -154,10 +173,25 @@ export function parseOrThrow<T extends z.ZodTypeAny>(
  */
 export function coerce<T extends z.ZodTypeAny>(
   schema: T,
-  value: unknown
+  value: unknown,
+  options?: ParserOptions
 ): CoerceResult<z.infer<T>> {
-  const result = coerceToSchema(schema, value);
-  if (!result.success) return result;
+  const limits = resolveLimits(options);
+  try { inspectValue(value, limits); } catch (e) {
+    if (e instanceof ResourceLimitError) return { success: false, error: { type: "resource_limit_error", message: e.message, path: [], expected: e.budget, received: "limit exceeded", budget: e.budget, limit: e.limit }, diagnostics: [{ code: "resource_limit_exceeded", phase: "safety", path: [], severity: "error", cost: 0 }] };
+    throw e;
+  }
+  const ctx = createContext(limits);
+  let result: CoerceResult<z.infer<T>>;
+  try { result = coerceToSchema(schema, value, ctx); } catch (e) {
+    if (e instanceof ResourceLimitError) return { success: false, error: { type: "resource_limit_error", message: e.message, path: [], expected: e.budget, received: "limit exceeded", budget: e.budget, limit: e.limit }, diagnostics: [{ code: "resource_limit_exceeded", phase: "safety", path: [], severity: "error", cost: 0 }] };
+    throw e;
+  }
+  if (!result.success) {
+    result.diagnostics = diagnosticsFromFlags(ctx.flags, limits);
+    return result;
+  }
+  result.diagnostics = diagnosticsFromFlags(result.flags, limits);
   const validated = schema.safeParse(result.value);
   if (validated.success) return { ...result, value: validated.data };
   const issue = validated.error.issues[0];
