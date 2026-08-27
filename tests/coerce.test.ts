@@ -326,14 +326,12 @@ describe("coerce", () => {
       }
     });
 
-    it("coerces number to string if string comes first", () => {
-      // Union tries in order - string can coerce from number
+    it("prefers an exact number even if a coercible string comes first", () => {
       const schema = z.union([z.string(), z.number()]);
       const result = coerce(schema, 42);
       expect(result.success).toBe(true);
       if (result.success) {
-        // String comes first and can coerce from number
-        expect(result.value).toBe("42");
+        expect(result.value).toBe(42);
       }
     });
 

@@ -1,9 +1,15 @@
 import { jsonrepair } from "jsonrepair";
 import { Flag, flag, type FlagWithContext } from "./flags.js";
+import { ResourceLimitError, type ParserLimits } from "./diagnostics.js";
 
 export interface ParseResult {
   value: unknown;
   flags: FlagWithContext[];
+}
+
+/** Internal instrumentation used by streaming profiles. */
+export interface ParseWork {
+  repairAttempts: number;
 }
 
 /**
@@ -13,7 +19,16 @@ export interface ParseResult {
  * We try progressively more aggressive strategies to extract valid JSON,
  * preferring minimal intervention (so we try JSON.parse first before repair).
  */
-export function parseJson(input: string): ParseResult {
+export function parseJson(input: string, limits?: ParserLimits, work?: ParseWork): ParseResult {
+  if (limits && new TextEncoder().encode(input).byteLength > limits.maxInputBytes) {
+    throw new ResourceLimitError("maxInputBytes", limits.maxInputBytes);
+  }
+  let repairWork = 0;
+  const spendRepair = (): void => {
+    repairWork++;
+    if (work) work.repairAttempts++;
+    if (limits && repairWork > limits.maxRepairWork) throw new ResourceLimitError("maxRepairWork", limits.maxRepairWork);
+  };
   const trimmed = input.trim();
   const flags: FlagWithContext[] = [];
 
@@ -33,10 +48,12 @@ export function parseJson(input: string): ParseResult {
     } catch {
       // The extracted content might still have syntax issues
       try {
+        spendRepair();
         const repaired = jsonrepair(markdownResult);
         flags.push(flag(Flag.JsonRepaired));
         return { value: JSON.parse(repaired), flags };
-      } catch {
+      } catch (error) {
+        if (error instanceof ResourceLimitError) throw error;
         // Markdown extraction didn't help, try other strategies
       }
     }
@@ -50,10 +67,12 @@ export function parseJson(input: string): ParseResult {
       return { value: JSON.parse(extracted), flags };
     } catch {
       try {
+        spendRepair();
         const repaired = jsonrepair(extracted);
         flags.push(flag(Flag.JsonRepaired));
         return { value: JSON.parse(repaired), flags };
-      } catch {
+      } catch (error) {
+        if (error instanceof ResourceLimitError) throw error;
         // Extraction didn't help, try repairing the whole thing
       }
     }
@@ -62,10 +81,12 @@ export function parseJson(input: string): ParseResult {
   // Last resort: let jsonrepair try to fix whatever syntax issues exist
   // (trailing commas, unquoted keys, single quotes, comments, etc.)
   try {
+    spendRepair();
     const repaired = jsonrepair(trimmed);
     flags.push(flag(Flag.JsonRepaired));
     return { value: JSON.parse(repaired), flags };
-  } catch {
+  } catch (error) {
+    if (error instanceof ResourceLimitError) throw error;
     throw new JsonParseError(`Failed to parse JSON: ${trimmed.slice(0, 100)}...`);
   }
 }

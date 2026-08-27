@@ -6,6 +6,7 @@ import {
   success,
   failure,
   describeType,
+  addFlag,
 } from "../types.js";
 
 export type ElementCoercer<T> = (value: unknown, ctx: CoerceContext) => CoerceResult<T>;
@@ -42,7 +43,7 @@ export function coerceArray<T>(
   }
 
   // Single value → wrap in array (common LLM behavior)
-  ctx.flags.push({ flag: Flag.SingleToArray });
+  addFlag(ctx, { flag: Flag.SingleToArray });
   const elementCtx = childContext(ctx, 0);
   const result = elementCoercer(value, elementCtx);
 
@@ -79,7 +80,7 @@ export function coerceArrayToSingle<T>(
     );
   }
 
-  ctx.flags.push({ flag: Flag.ArrayToSingle });
+  addFlag(ctx, { flag: Flag.ArrayToSingle });
   const elementCtx = childContext(ctx, 0);
   return elementCoercer(value[0], elementCtx);
 }
@@ -97,7 +98,7 @@ export function coerceTuple<T extends unknown[]>(
     return failure("Expected tuple (array), got " + describeType(value), ctx, "tuple", describeType(value));
   }
 
-  if (value.length !== elementCoercers.length) {
+  if ((!ctx.partial && value.length !== elementCoercers.length) || value.length > elementCoercers.length) {
     return failure(
       `Expected tuple of length ${elementCoercers.length}, got length ${value.length}`,
       ctx,

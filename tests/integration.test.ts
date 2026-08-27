@@ -203,6 +203,19 @@ Let me know if you need anything else!`;
   });
 
   describe("error handling", () => {
+    it("enforces Zod refinements after coercion", () => {
+      const schema = z.object({ score: z.number().min(0).max(100) });
+      const result = parse(schema, '{"score":"101"}');
+      expect(result.success).toBe(false);
+      if (!result.success) expect(result.error.type).toBe("zod_validation_error");
+    });
+
+    it("executes Zod transforms exactly once", () => {
+      const schema = z.object({ name: z.string().transform((value) => value.toUpperCase()) });
+      const result = parse(schema, '{"name":"Ada"}');
+      expect(result.success && result.data.name).toBe("ADA");
+    });
+
     it("returns error for missing required field", () => {
       const schema = z.object({ required: z.string() });
       const result = parse(schema, "{}");

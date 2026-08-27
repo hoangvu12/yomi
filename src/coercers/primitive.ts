@@ -5,6 +5,7 @@ import {
   success,
   failure,
   describeType,
+  addFlag,
 } from "../types.js";
 
 /**
@@ -18,12 +19,12 @@ export function coerceString(value: unknown, ctx: CoerceContext): CoerceResult<s
 
   // Numbers and booleans have obvious string representations
   if (typeof value === "number") {
-    ctx.flags.push({ flag: Flag.NumberToString });
+    addFlag(ctx, { flag: Flag.NumberToString });
     return success(String(value), ctx);
   }
 
   if (typeof value === "boolean") {
-    ctx.flags.push({ flag: Flag.BoolToString });
+    addFlag(ctx, { flag: Flag.BoolToString });
     return success(String(value), ctx);
   }
 
@@ -57,7 +58,7 @@ export function coerceNumber(value: unknown, ctx: CoerceContext): CoerceResult<n
     const trimmed = value.trim();
     const parsed = parseFloat(trimmed);
     if (!Number.isNaN(parsed)) {
-      ctx.flags.push({ flag: Flag.StringToNumber });
+      addFlag(ctx, { flag: Flag.StringToNumber });
       return success(parsed, ctx);
     }
     return failure(`Cannot parse "${trimmed}" as number`, ctx, "number", "string");
@@ -91,7 +92,7 @@ export function coerceInt(value: unknown, ctx: CoerceContext): CoerceResult<numb
   }
 
   const rounded = Math.round(num);
-  ctx.flags.push({ flag: Flag.FloatToInt, original: num, rounded });
+  addFlag(ctx, { flag: Flag.FloatToInt, original: num, rounded });
   return success(rounded, ctx);
 }
 
@@ -109,12 +110,12 @@ export function coerceBoolean(value: unknown, ctx: CoerceContext): CoerceResult<
 
     // Common truthy strings across languages and conventions
     if (lower === "true" || lower === "yes" || lower === "1" || lower === "on") {
-      ctx.flags.push({ flag: Flag.StringToBool });
+      addFlag(ctx, { flag: Flag.StringToBool });
       return success(true, ctx);
     }
 
     if (lower === "false" || lower === "no" || lower === "0" || lower === "off") {
-      ctx.flags.push({ flag: Flag.StringToBool });
+      addFlag(ctx, { flag: Flag.StringToBool });
       return success(false, ctx);
     }
 
@@ -124,11 +125,11 @@ export function coerceBoolean(value: unknown, ctx: CoerceContext): CoerceResult<
   // 1/0 are common boolean representations in APIs
   if (typeof value === "number") {
     if (value === 1) {
-      ctx.flags.push({ flag: Flag.StringToBool });
+      addFlag(ctx, { flag: Flag.StringToBool });
       return success(true, ctx);
     }
     if (value === 0) {
-      ctx.flags.push({ flag: Flag.StringToBool });
+      addFlag(ctx, { flag: Flag.StringToBool });
       return success(false, ctx);
     }
     return failure(`Cannot coerce number ${value} to boolean`, ctx, "boolean", "number");
@@ -156,7 +157,7 @@ export function coerceNull(value: unknown, ctx: CoerceContext): CoerceResult<nul
   }
 
   if (value === undefined) {
-    ctx.flags.push({ flag: Flag.NullToUndefined });
+    addFlag(ctx, { flag: Flag.NullToUndefined });
     return success(null, ctx);
   }
 
@@ -174,7 +175,7 @@ export function coerceUndefined(value: unknown, ctx: CoerceContext): CoerceResul
   }
 
   if (value === null) {
-    ctx.flags.push({ flag: Flag.NullToUndefined });
+    addFlag(ctx, { flag: Flag.NullToUndefined });
     return success(undefined, ctx);
   }
 

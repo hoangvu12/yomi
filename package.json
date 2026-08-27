@@ -16,6 +16,7 @@
     "lint": "eslint src --ext .ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest",
+    "profile:stream": "bun run build && node --expose-gc scripts/profile-streaming.mjs",
     "prepublishOnly": "bun run build"
   },
   "keywords": [

@@ -1,55 +1,26 @@
 # Yomi (読み)
 
-**Yomi** (pronounced "yoh-mee", 読み) means "reading" or "interpretation" in Japanese. This library interprets messy LLM output and coerces it to match your Zod schemas.
+Yomi is a local, provider-neutral TypeScript library for turning messy LLM output into values that satisfy Zod schemas. It repairs JSON, performs schema-aligned coercion, explains interpretation decisions, and produces completion-aware semantic snapshots while text is streaming.
 
-## Version Compatibility
+Yomi does not make model requests, manage credentials, retry providers, or send telemetry.
 
-| Yomi Version | Zod Version | Notes |
-|--------------|-------------|-------|
-| 1.x | ^4.0.0 | Zod v4 support with new instanceof-based type checking |
-| 0.x | ^3.20.0 | Zod v3 support (legacy) |
+## Highlights
 
-## The Problem
+- Repairs malformed JSON and extracts JSON from Markdown or surrounding prose.
+- Coerces values to Zod input shapes, then runs the original Zod schema exactly once.
+- Scores all eligible union candidates and reports ambiguity instead of silently relying on declaration order.
+- Produces completion-aware streaming snapshots from string or UTF-8 byte chunks.
+- Supports atomic values, reveal-on-completion, parent gating, state wrappers, immutable revisions, and semantic deduplication.
+- Generates compact model-facing output instructions from the same Zod schema used for parsing.
+- Supports descriptions plus model-facing field and enum aliases without changing application output types.
+- Returns bounded structured diagnostics and enforces finite resource limits.
+- Runs optional named advisory checks without discarding otherwise valid data.
+- Adapts arbitrary provider event streams without adding provider dependencies.
 
-LLMs don't return perfect JSON. They return:
+## Requirements
 
-```json
-{name: "John", age: "25",}  // unquoted keys, trailing comma
-```
-
-```
-Here's the user data: {"name": "John", "age": 25}  // wrapped in text
-```
-
-```json
-{"name": "John", "age": "25", "active": "yes"}  // wrong types everywhere
-```
-
-`JSON.parse()` fails. Even if it succeeds, your types are wrong.
-
-## The Solution
-
-Yomi uses a two-phase approach inspired by [BAML](https://docs.boundaryml.com/)'s schema-aligned parsing:
-
-1. **Flexible JSON parsing** - Fix malformed JSON, extract from markdown/text
-2. **Schema-aligned coercion** - Walk your Zod schema and coerce values to match
-
-```ts
-import { z } from "zod";
-import { parse } from "@hoangvu12/yomi";
-
-const User = z.object({
-  name: z.string(),
-  age: z.number(),
-  active: z.boolean(),
-});
-
-const result = parse(User, `{name: "John", age: "25", active: "yes"}`);
-
-// result.success === true
-// result.data === { name: "John", age: 25, active: true }
-// result.flags === ["json_repaired", "string_to_number", "string_to_bool"]
-```
+- Zod 4
+- Node.js or Bun with ESM support
 
 ## Installation
 
@@ -59,139 +30,207 @@ npm install @hoangvu12/yomi zod
 bun add @hoangvu12/yomi zod
 ```
 
-## API
-
-### `parse(schema, input)`
-
-Parse and coerce input to match schema. Returns a result object.
+## Parse messy model output
 
 ```ts
-const result = parse(UserSchema, rawInput);
+import { z } from "zod";
+import { parse } from "@hoangvu12/yomi";
+
+const User = z.object({
+  name: z.string(),
+  age: z.number().int(),
+  active: z.boolean(),
+});
+
+const result = parse(User, `Here is the result: {name: "Ada", age: "37", active: "yes",}`);
 
 if (result.success) {
-  console.log(result.data); // typed as z.infer<typeof UserSchema>
-  console.log(result.flags); // what transformations happened
+  result.data;        // { name: "Ada", age: 37, active: true }
+  result.flags;       // repairs and coercions that occurred
+  result.diagnostics; // bounded, path-aware interpretation records
+  result.advisory;    // optional quality-check results
 } else {
-  console.log(result.error); // what went wrong
+  console.error(result.error.type, result.error.message);
 }
 ```
 
-### `parseOrThrow(schema, input)`
+`parseOrThrow(schema, input, options)` returns the final value or throws. Use `coerce(schema, value, options)` and `coerceOrThrow(schema, value)` when the input is already a JavaScript value.
 
-Same as `parse`, but throws on failure. Returns the coerced value directly.
+Every successful final result passes the complete original Zod pipeline. Refinements, formats, defaults, pipes, and transforms therefore remain the strict authority.
 
-```ts
-const user = parseOrThrow(UserSchema, rawInput);
-// user is typed as z.infer<typeof UserSchema>
-```
+## Streaming semantic values
 
-### `coerce(schema, value)` / `coerceOrThrow(schema, value)`
-
-Skip JSON parsing, just do schema coercion on an already-parsed value.
+`createStreamParser` accepts arbitrary string and UTF-8 byte chunks. `push()` produces a partial semantic snapshot when useful data is available; `finish()` uses the same strict final pipeline as `parse()`.
 
 ```ts
-const result = coerce(UserSchema, { name: "John", age: "25" });
-```
+import { createStreamParser } from "@hoangvu12/yomi";
 
-## What It Fixes
+const stream = createStreamParser(User);
 
-### JSON Parsing
-
-| Input | Fixed |
-|-------|-------|
-| `{name: "John"}` | Unquoted keys |
-| `{"name": "John",}` | Trailing commas |
-| `// comment` | Comments |
-| `'single quotes'` | Single quotes |
-| `` ```json {...}``` `` | Markdown code blocks |
-| `Here's the data: {...}` | Surrounding text |
-
-### Type Coercion
-
-| From | To | Example |
-|------|----|---------|
-| `"123"` | `number` | `"25"` → `25` |
-| `"12.5"` | `int` | `"12.5"` → `13` (rounded) |
-| `123` | `string` | `123` → `"123"` |
-| `"true"`, `"yes"`, `"1"` | `boolean` | → `true` |
-| `"false"`, `"no"`, `"0"` | `boolean` | → `false` |
-| `value` | `array` | `"x"` → `["x"]` |
-| `[value]` | `single` | `["x"]` → `"x"` |
-| `"PENDING"` | `enum` | Case-insensitive match |
-| `null` | `undefined` | For optional fields |
-| `{extra: ...}` | `object` | Extra keys ignored |
-
-## Flags
-
-Every transformation is tracked. Use flags to:
-- Log when coercion happens in production
-- Detect if defaults were used vs explicit values
-- Debug why parsing succeeded unexpectedly
-
-```ts
-const result = parse(Schema, input);
-if (result.success) {
-  for (const flag of result.flags) {
-    console.log(flag);
-    // { flag: "string_to_number" }
-    // { flag: "extra_keys_ignored", keys: ["confidence"] }
-    // { flag: "float_to_int", original: 12.5, rounded: 13 }
+for await (const chunk of modelTextChunks) {
+  const update = stream.push(chunk);
+  if (update.success) {
+    console.log(update.snapshot.data);
+    console.log(update.snapshot.completion.state); // pending | incomplete | complete
+    console.log(update.snapshot.revision);
   }
 }
+
+const final = stream.finish();
 ```
 
-### Available Flags
+Strings, objects, and collections grow incrementally by default. Numbers, booleans, nulls, literals, enums, dates, and discriminators remain hidden until lexically complete. Synthetic delimiters inserted by JSON repair never count as completion evidence.
 
-| Flag | Meaning |
-|------|---------|
-| `json_repaired` | jsonrepair fixed the JSON |
-| `extracted_from_markdown` | Extracted from `` ```json ``` `` block |
-| `extracted_from_text` | Extracted JSON from surrounding text |
-| `string_to_number` | `"123"` → `123` |
-| `string_to_bool` | `"true"` → `true` |
-| `number_to_string` | `123` → `"123"` |
-| `bool_to_string` | `true` → `"true"` |
-| `float_to_int` | `12.5` → `13` |
-| `single_to_array` | `x` → `[x]` |
-| `array_to_single` | `[x]` → `x` |
-| `null_to_undefined` | `null` → `undefined` |
-| `extra_keys_ignored` | Object had extra properties |
-| `missing_optional_key` | Optional field was missing |
-| `default_used` | Used schema's default value |
-| `enum_case_insensitive` | `"PENDING"` matched `"pending"` |
+### Streaming policies
 
-## Supported Zod Types
+Policies use dot paths and `*` for collection elements:
 
-- Primitives: `string`, `number`, `boolean`, `null`, `undefined`, `literal`
-- Objects: `object`, `record`
-- Arrays: `array`, `tuple`
-- Unions: `union`, `discriminatedUnion`, `optional`, `nullable`
-- Enums: `enum`, `nativeEnum`
-- Modifiers: `default`, `catch`
-- Passthrough: `any`, `unknown`
-
-## How It Works
-
-```
-LLM Output (string)
-       │
-       ▼
-┌─────────────────┐
-│  Flexible JSON  │  ← jsonrepair + markdown extraction
-│     Parser      │
-└────────┬────────┘
-         │ unknown
-         ▼
-┌─────────────────┐
-│  Schema-Aligned │  ← walks Zod schema tree
-│    Coercer      │
-└────────┬────────┘
-         │ { value: T, flags: Flag[] }
-         ▼
-     Result<T>
+```ts
+const stream = createStreamParser(ResultSchema, {
+  fields: {
+    "events.*.kind": { requiredForParent: true },
+    "events.*.payload": { reveal: "complete" },
+    "events.*.summary": { withState: true },
+  },
+});
 ```
 
-The coercer recursively walks your Zod schema using `instanceof` checks (Zod v4) to identify schema types, dispatching to type-specific coercion functions. Each coercer tries to interpret the input value as the expected type, recording flags when transformations occur.
+- `reveal: "complete"` withholds the selected value until complete.
+- `requiredForParent: true` withholds its containing object until the child is visible, non-null, and schema-valid.
+- `withState: true` wraps projected data as `{ value, state }`, distinguishing pending from an emitted `null`.
+- `atomic: "none"` disables the safe-default atomic policy.
+
+Policy paths are validated when the parser is created. Snapshots are deeply frozen, revisions increase only when the semantic value or state changes, and `parseStream(schema, chunks, options)` suppresses duplicate emissions automatically.
+
+`stream.metrics` exposes stable counters for input bytes, cumulative parsed bytes, completion scans, repair attempts, union candidates, snapshots, and retained bytes. See [streaming profile](docs/streaming-profile.md) for the benchmark harness and current optimization decision.
+
+## Union selection
+
+Yomi evaluates all eligible union variants. Exact matches cost less than repairs and coercions, while discriminated unions use exact discriminator evidence first. Materially different equal-cost results fail with `ambiguity_error` by default.
+
+```ts
+const result = parse(MyUnion, input, {
+  unionTieBreaker: "first", // compatibility mode; ambiguity remains diagnostic
+});
+```
+
+Chosen and rejected candidates, costs, and validation evidence are available in diagnostics.
+
+## Generate output instructions
+
+Generate compact prompt text from the parsing schema so prompts and runtime validation do not drift:
+
+```ts
+import { renderFormat, parserContractFingerprint } from "@hoangvu12/yomi";
+
+const rendered = renderFormat(User);
+console.log(rendered.format);
+console.log(rendered.fingerprint);
+
+const contract = parserContractFingerprint(User, parserOptions);
+```
+
+Rendering supports objects, collections, tuples, records, unions, literals, enums, optionality, nullability, descriptions, aliases, and recursive schemas through stable references. Unsupported constructs return compile diagnostics. Fingerprints cover the normalized schema and observable parser policies.
+
+## Model-facing aliases and descriptions
+
+Use normal Zod descriptions and `yomi()` metadata. Aliases are accepted from model output and mapped back to canonical application names.
+
+```ts
+import { z } from "zod";
+import { yomi } from "@hoangvu12/yomi";
+
+const Status = yomi(z.enum(["pending", "complete"]).describe("Job state"))
+  .valueAlias("pending", "P")
+  .valueAlias("complete", "C")
+  .valueDescription("complete", "The job has finished");
+
+const Job = z.object({
+  identifier: yomi(z.string().describe("Stable job ID")).alias("id"),
+  status: Status,
+});
+```
+
+Canonical names win when canonical and aliased keys both appear. Alias collisions are compile diagnostics, and aliases are always literal keys—not executable property paths.
+
+## Advisory checks
+
+Advisory checks add named, non-fatal quality signals after strict validation succeeds:
+
+```ts
+const result = parse(Article, input, {
+  advisoryChecks: [{
+    name: "has-substantive-title",
+    check: (article) => article.title.length >= 8 || {
+      success: false,
+      message: "Title is unusually short",
+      path: ["title"],
+    },
+  }],
+});
+```
+
+Failed or throwing checks preserve the parsed value and become bounded warning diagnostics. Check names participate in the parser contract fingerprint. Streaming evaluates advisory checks only at `finish()`, when a strict final value exists.
+
+## Safety and diagnostics
+
+Successful parses expose diagnostics with a stable code, phase, schema path, severity, cost, and optional bounded evidence. Failures distinguish JSON, coercion, Zod validation, ambiguity, and resource exhaustion.
+
+Finite defaults protect input bytes, nesting depth, collection size, union candidate count, repair work, retained evidence bytes, and diagnostic count.
+
+```ts
+const result = parse(Schema, input, {
+  limits: {
+    maxInputBytes: 256_000,
+    maxNestingDepth: 32,
+    maxCollectionSize: 2_000,
+  },
+});
+```
+
+Limit failures use `resource_limit_error` and identify the exhausted budget. Object construction treats prototype-sensitive keys as ordinary data and avoids prototype pollution.
+
+## Provider event adapters
+
+`adaptProviderEvents` translates any SDK event stream into the text or byte chunks Yomi accepts:
+
+```ts
+import { adaptProviderEvents, parseStream } from "@hoangvu12/yomi";
+
+const chunks = adaptProviderEvents(providerEvents, (event) =>
+  event.type === "text_delta"
+    ? { type: "text", value: event.text }
+    : event.type === "ping"
+      ? { type: "ignore" }
+      : { type: "unknown", reason: event.type },
+  { signal },
+);
+
+for await (const snapshot of parseStream(ResultSchema, chunks)) {
+  render(snapshot);
+}
+```
+
+Unknown events throw unless explicitly configured with `unknownEvent: "ignore"`. Cancellation closes the upstream iterator. Authentication, retries, fallbacks, timeouts, token accounting, and model selection remain the caller's responsibility.
+
+## Common repairs and coercions
+
+Yomi handles Markdown fences, surrounding prose, comments, unquoted keys, trailing commas, single quotes, string-to-number and string-to-boolean conversion, number/boolean-to-string conversion, single-item array conversion, case-insensitive enums, defaults, optionals, and ignored extra keys. Every applied interpretation is retained as a flag and structured diagnostic.
+
+## Supported schema families
+
+The normalized schema compiler and parser cover primitives, literals, enums, objects, records, arrays, tuples, unions, discriminated unions, intersections, nullable/optional/default/catch/readonly wrappers, pipes, dates, lazy recursive schemas, and passthrough unknown values. Unsupported compilation constructs are reported instead of silently rendered incorrectly.
+
+## Development
+
+```bash
+bun test
+bun run typecheck
+bun run build
+bun run profile:stream
+```
+
+The normal suite includes a durable corpus that replays messy responses across meaningful character prefixes and UTF-8 byte boundaries.
 
 ## License
 

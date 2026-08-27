@@ -6,6 +6,7 @@ import {
   success,
   failure,
   describeType,
+  addFlag,
 } from "../types.js";
 
 export type PropertyCoercer<T> = (value: unknown, ctx: CoerceContext) => CoerceResult<T>;
@@ -15,6 +16,7 @@ export interface ObjectSchema {
     coercer: PropertyCoercer<unknown>;
     optional: boolean;
     default?: unknown;
+    aliases?: readonly string[];
   };
 }
 
@@ -43,7 +45,7 @@ export function coerceObject<T extends Record<string, unknown>>(
     );
   }
 
-  const result: Record<string, unknown> = {};
+  const result: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
   const inputKeys = new Set(Object.keys(value));
   const schemaKeys = new Set(Object.keys(schema));
 
@@ -52,15 +54,20 @@ export function coerceObject<T extends Record<string, unknown>>(
     if (!propSchema) continue;
 
     const propCtx = childContext(ctx, key);
-    const inputValue = value[key];
+    const alias = propSchema.aliases?.find((name) => Object.prototype.hasOwnProperty.call(value, name));
+    const sourceKey = Object.prototype.hasOwnProperty.call(value, key) ? key : alias;
+    const inputValue = sourceKey === undefined ? undefined : value[sourceKey];
 
-    if (!(key in value) || inputValue === undefined) {
+    if (sourceKey === undefined || inputValue === undefined) {
+      if (ctx.partial) {
+        continue;
+      }
       if (propSchema.optional) {
         if ("default" in propSchema) {
-          ctx.flags.push({ flag: Flag.DefaultUsed });
+          addFlag(propCtx, { flag: Flag.DefaultUsed });
           result[key] = propSchema.default;
         } else {
-          ctx.flags.push({ flag: Flag.MissingOptionalKey });
+          addFlag(propCtx, { flag: Flag.MissingOptionalKey });
           // Leave undefined - don't add to result
         }
         continue;
@@ -69,19 +76,23 @@ export function coerceObject<T extends Record<string, unknown>>(
       }
     }
 
+    if (sourceKey !== key) addFlag(propCtx, { flag: Flag.AliasUsed, input: sourceKey, matched: key });
+
     const propResult = propSchema.coercer(inputValue, propCtx);
     if (!propResult.success) {
       return propResult;
     }
 
     result[key] = propResult.value;
-    inputKeys.delete(key);
+    inputKeys.delete(sourceKey);
+    // Canonical keys win; a simultaneously supplied alias is ignored, not an extra key.
+    for (const name of propSchema.aliases ?? []) inputKeys.delete(name);
   }
 
   // Track extra keys so callers know the LLM added unrequested fields
   if (inputKeys.size > 0) {
     const extraKeys = Array.from(inputKeys);
-    ctx.flags.push({ flag: Flag.ExtraKeysIgnored, keys: extraKeys });
+    addFlag(ctx, { flag: Flag.ExtraKeysIgnored, keys: extraKeys });
   }
 
   return success(result as T, ctx);
@@ -105,7 +116,7 @@ export function coerceRecord<T>(
     );
   }
 
-  const result: Record<string, T> = {};
+  const result: Record<string, T> = Object.create(null) as Record<string, T>;
 
   for (const [key, val] of Object.entries(value)) {
     const propCtx = childContext(ctx, key);

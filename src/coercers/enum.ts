@@ -5,6 +5,7 @@ import {
   success,
   failure,
   describeType,
+  addFlag,
 } from "../types.js";
 
 /**
@@ -14,7 +15,8 @@ import {
 export function coerceEnum<T extends string>(
   value: unknown,
   allowedValues: readonly T[],
-  ctx: CoerceContext
+  ctx: CoerceContext,
+  aliases: Readonly<Record<string, readonly string[]>> = {},
 ): CoerceResult<T> {
   if (typeof value !== "string") {
     return failure(
@@ -30,12 +32,19 @@ export function coerceEnum<T extends string>(
     return success(value as T, ctx);
   }
 
+  for (const canonical of allowedValues) {
+    if (aliases[canonical]?.includes(value)) {
+      addFlag(ctx, { flag: Flag.AliasUsed, input: value, matched: canonical });
+      return success(canonical, ctx);
+    }
+  }
+
   // Fallback: case-insensitive match
   const lowerValue = value.toLowerCase();
   const match = allowedValues.find((v) => v.toLowerCase() === lowerValue);
 
   if (match) {
-    ctx.flags.push({ flag: Flag.EnumCaseInsensitive, input: value, matched: match });
+    addFlag(ctx, { flag: Flag.EnumCaseInsensitive, input: value, matched: match });
     return success(match, ctx);
   }
 
@@ -73,13 +82,13 @@ export function coerceNativeEnum<T extends Record<string, string | number>>(
       if (isNaN(Number(key))) {
         // Match against enum key name
         if (key.toLowerCase() === lowerValue) {
-          ctx.flags.push({ flag: Flag.EnumCaseInsensitive, input: value, matched: key });
+          addFlag(ctx, { flag: Flag.EnumCaseInsensitive, input: value, matched: key });
           return success(enumValue as T[keyof T], ctx);
         }
 
         // Match against string enum value
         if (typeof enumValue === "string" && enumValue.toLowerCase() === lowerValue) {
-          ctx.flags.push({ flag: Flag.EnumCaseInsensitive, input: value, matched: enumValue });
+          addFlag(ctx, { flag: Flag.EnumCaseInsensitive, input: value, matched: enumValue });
           return success(enumValue as T[keyof T], ctx);
         }
       }
