@@ -13,6 +13,7 @@ export { JsonParseError } from "./parse.js";
 export { DEFAULT_PARSER_LIMITS, ResourceLimitError, type Diagnostic, type ParserLimits, type ParserOptions, type ParserBudget, type StreamFieldPolicy, type UnionTieBreaker } from "./diagnostics.js";
 export { advisoryPolicyFingerprint, type AdvisoryCheck, type AdvisoryCheckOutcome, type AdvisoryReport, type AdvisoryStatus } from "./advisory.js";
 export { inspectCompletion, type CompletionNode, type CompletionState } from "./syntax.js";
+export { type StreamState, type StreamStateName } from "./semantic.js";
 export { compileSchema, renderFormat, schemaFingerprint, SCHEMA_CONTRACT_VERSION, type CompiledNode, type CompiledSchema, type CompileSchemaOptions, type RenderFormatResult } from "./schema.js";
 export { yomi, type YomiMetadata, type YomiSchema } from "./metadata.js";
 export {

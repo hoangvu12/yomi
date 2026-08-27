@@ -8,7 +8,7 @@ import type { Diagnostic } from "./diagnostics.js";
 import { diagnosticsFromFlags, inspectValue, resolveLimits, ResourceLimitError, type ParserOptions } from "./diagnostics.js";
 import { inspectCompletion, type CompletionNode } from "./syntax.js";
 import { runAdvisoryChecks } from "./advisory.js";
-import { createSemanticProjectionState, projectStreamingValue, validateStreamPolicies } from "./semantic.js";
+import { applyStateWrappers, createSemanticProjectionState, projectStreamingValue, validateStreamPolicies } from "./semantic.js";
 
 export type DeepPartial<T> =
   T extends readonly (infer U)[] ? DeepPartial<U>[] :
@@ -23,6 +23,8 @@ export interface StreamSnapshot<T> {
   /** Always false for push snapshots; only finish() can establish completeness. */
   done: false;
   text: string;
+  /** Monotonically increasing when the semantic projection changes. */
+  revision: number;
 }
 
 export type StreamPushResult<T> =
@@ -51,6 +53,9 @@ export function createStreamParser<S extends z.ZodTypeAny>(
   let receivedBytes = 0;
   const decoder = new TextDecoder();
   const semanticState = createSemanticProjectionState();
+  let revision = 0;
+  let previousSemantic: string | undefined;
+  let previousSnapshot: StreamSnapshot<z.infer<S>> | undefined;
 
   return {
     get text() { return buffer; },
@@ -71,16 +76,23 @@ export function createStreamParser<S extends z.ZodTypeAny>(
         ctx.flags.push(...parsed.flags);
         const result = coercePartialToSchema(schema, visible, ctx);
         if (!result.success) return { success: false, pending: true, completion, error: result.error };
-        return {
-          success: true,
-          snapshot: {
-            data: result.value as DeepPartial<z.infer<S>>,
+        const data = applyStateWrappers(schema, result.value, completion, options) as DeepPartial<z.infer<S>>;
+        const semantic = stableSemanticString([data, completion]);
+        if (semantic === previousSemantic && previousSnapshot) return { success: true, snapshot: previousSnapshot };
+        const snapshot = deepFreeze({
+            data,
             flags: result.flags,
             diagnostics: [...diagnosticsFromFlags(result.flags, limits), ...ctx.diagnostics].slice(0, limits.maxDiagnostics),
             completion,
-            done: false,
+            done: false as const,
             text: buffer,
-          },
+            revision: ++revision,
+          });
+        previousSemantic = semantic;
+        previousSnapshot = snapshot;
+        return {
+          success: true,
+          snapshot,
         };
       } catch (error) {
         if (error instanceof ResourceLimitError) {
@@ -146,9 +158,25 @@ export async function* parseStream<S extends z.ZodTypeAny>(
   options?: ParserOptions<z.infer<S>>
 ): AsyncGenerator<StreamSnapshot<z.infer<S>>, ParseResult<z.infer<S>>, void> {
   const parser = createStreamParser(schema, options);
+  let revision = 0;
   for await (const chunk of chunks) {
     const result = parser.push(chunk);
-    if (result.success) yield result.snapshot;
+    if (result.success && result.snapshot.revision !== revision) {
+      revision = result.snapshot.revision;
+      yield result.snapshot;
+    }
   }
   return parser.finish();
+}
+
+function stableSemanticString(value: unknown): string {
+  return JSON.stringify(value, (_key, item) => item instanceof Date ? item.toISOString() : item);
+}
+
+function deepFreeze<T>(value: T): T {
+  if (value && typeof value === "object" && !Object.isFrozen(value)) {
+    Object.freeze(value);
+    for (const child of Object.values(value as Record<string, unknown>)) deepFreeze(child);
+  }
+  return value;
 }

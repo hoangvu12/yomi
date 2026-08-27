@@ -39,6 +39,67 @@ export function validateStreamPolicies(schema: z.ZodTypeAny, options?: ParserOpt
   }
 }
 
+export type StreamStateName = "pending" | "incomplete" | "complete";
+
+export interface StreamState<T> {
+  readonly value: T | undefined;
+  readonly state: StreamStateName;
+}
+
+/**
+ * Add configured state wrappers after schema coercion. Keeping this separate from
+ * projection means wrappers can never be mistaken for input values by Zod.
+ */
+export function applyStateWrappers(
+  schema: z.ZodTypeAny,
+  projected: unknown,
+  completion: CompletionNode,
+  options?: ParserOptions
+): unknown {
+  if (!Object.values(options?.fields ?? {}).some((policy) => policy.withState)) return projected;
+  return wrap(schema, projected, completion, [], options);
+}
+
+function wrap(schema: z.ZodTypeAny, value: unknown, node: CompletionNode | undefined, path: (string | number)[], options?: ParserOptions): unknown {
+  const current = unwrap(schema);
+  let nested = value;
+  if (current instanceof z.ZodObject) {
+    const input = isRecord(value) ? value : {};
+    const output: Record<string, unknown> = { ...input };
+    const children = node?.children as Readonly<Record<string, CompletionNode>> | undefined;
+    for (const [name, childSchema] of Object.entries(current.shape as Record<string, z.ZodTypeAny>)) {
+      const childPath = [...path, name];
+      const configuredHere = options?.fields?.[policyPath(childPath)]?.withState === true;
+      if (!(name in input) && !configuredHere) continue;
+      output[name] = wrap(childSchema, input[name], children?.[name], childPath, options);
+    }
+    nested = output;
+  } else if (current instanceof z.ZodArray && Array.isArray(value)) {
+    const children = node?.children as readonly CompletionNode[] | undefined;
+    const itemPolicy = options?.fields?.[policyPath([...path, 0])];
+    if (itemPolicy?.withState && children && children.length > value.length) {
+      let visibleIndex = 0;
+      nested = children.map((child, index) => {
+        const guarded = itemPolicy.reveal === "complete" || itemPolicy.requiredForParent || (options?.atomic !== "none" && isAtomic(current.element as z.ZodTypeAny));
+        const visible = !guarded || child.state === "complete";
+        const item = visible ? value[visibleIndex++] : undefined;
+        return wrap(current.element as z.ZodTypeAny, item, child, [...path, index], options);
+      });
+    } else {
+      nested = value.map((item, index) => wrap(current.element as z.ZodTypeAny, item, children?.[index], [...path, index], options));
+    }
+  } else if (current instanceof z.ZodTuple && Array.isArray(value)) {
+    const children = node?.children as readonly CompletionNode[] | undefined;
+    const items = current.def.items as z.ZodTypeAny[];
+    nested = value.map((item, index) => wrap(items[index] ?? z.unknown(), item, children?.[index], [...path, index], options));
+  } else if (current instanceof z.ZodRecord && isRecord(value)) {
+    const children = node?.children as Readonly<Record<string, CompletionNode>> | undefined;
+    nested = Object.fromEntries(Object.entries(value).map(([name, item]) => [name, wrap(current.valueType as z.ZodTypeAny, item, children?.[name], [...path, name], options)]));
+  }
+  if (!options?.fields?.[policyPath(path)]?.withState) return nested;
+  return { value: nested, state: node?.state ?? "pending" } satisfies StreamState<unknown>;
+}
+
 function project(
   schema: z.ZodTypeAny,
   value: unknown,

@@ -32,6 +32,8 @@ export interface StreamFieldPolicy {
   reveal?: "complete";
   /** Withhold the nearest containing object until this child is visible, non-null, and valid. */
   requiredForParent?: boolean;
+  /** Wrap the projected value with its honest lexical completion state. */
+  withState?: boolean;
 }
 
 export type ParserOptions<T = unknown> = {
