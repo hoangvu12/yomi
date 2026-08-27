@@ -24,10 +24,24 @@ Yomi does not make model requests, manage credentials, retry providers, or send 
 
 ## Installation
 
+Install directly from GitHub; no npm registry access is required:
+
 ```bash
-npm install @hoangvu12/yomi zod
-# or
-bun add @hoangvu12/yomi zod
+npm install github:hoangvu12/yomi zod
+```
+
+For reproducible applications, pin a release tag or commit instead of following `main`:
+
+```bash
+npm install github:hoangvu12/yomi#v1.0.0 zod
+# or pin an exact commit
+npm install github:hoangvu12/yomi#<commit-sha> zod
+```
+
+GitHub dependencies run Yomi's `prepare` script and build `dist` locally during installation. Consumers need Git and a supported Node.js/npm toolchain, but do not need Bun. Imports remain unchanged:
+
+```ts
+import { parse } from "@hoangvu12/yomi";
 ```
 
 ## Parse messy model output
