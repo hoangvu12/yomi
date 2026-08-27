@@ -1,6 +1,7 @@
 import * as z from "zod";
 import type { ParserOptions } from "./diagnostics.js";
 import type { CompletionNode } from "./syntax.js";
+import { inspectZod, structurallyAccepts, unwrapZod } from "./zod-compat.js";
 
 const HIDDEN = Symbol("hidden streaming value");
 type Hidden = typeof HIDDEN;
@@ -33,7 +34,7 @@ export function validateStreamPolicies(schema: z.ZodTypeAny, options?: ParserOpt
     const parts = path.split(".");
     const targets = resolvePolicyPath(schema, parts);
     if (targets.length === 0) throw new TypeError(`Stream policy path "${path}" does not exist in the schema`);
-    if (policy.requiredForParent && targets.some((target) => !(unwrap(target.parent) instanceof z.ZodObject))) {
+    if (policy.requiredForParent && targets.some((target) => inspectZod(unwrapZod(target.parent)).kind !== "object")) {
       throw new TypeError(`Stream policy "${path}" with requiredForParent must target an object child`);
     }
   }
@@ -61,40 +62,41 @@ export function applyStateWrappers(
 }
 
 function wrap(schema: z.ZodTypeAny, value: unknown, node: CompletionNode | undefined, path: (string | number)[], options?: ParserOptions): unknown {
-  const current = unwrap(schema);
+  const current = unwrapZod(schema);
+  const inspected = inspectZod(current);
   let nested = value;
-  if (current instanceof z.ZodObject) {
+  if (inspected.kind === "object") {
     const input = isRecord(value) ? value : {};
     const output: Record<string, unknown> = { ...input };
     const children = node?.children as Readonly<Record<string, CompletionNode>> | undefined;
-    for (const [name, childSchema] of Object.entries(current.shape as Record<string, z.ZodTypeAny>)) {
+    for (const [name, childSchema] of Object.entries(inspected.shape)) {
       const childPath = [...path, name];
       const configuredHere = options?.fields?.[policyPath(childPath)]?.withState === true;
       if (!(name in input) && !configuredHere) continue;
       output[name] = wrap(childSchema, input[name], children?.[name], childPath, options);
     }
     nested = output;
-  } else if (current instanceof z.ZodArray && Array.isArray(value)) {
+  } else if (inspected.kind === "array" && Array.isArray(value)) {
     const children = node?.children as readonly CompletionNode[] | undefined;
     const itemPolicy = options?.fields?.[policyPath([...path, 0])];
     if (itemPolicy?.withState && children && children.length > value.length) {
       let visibleIndex = 0;
       nested = children.map((child, index) => {
-        const guarded = itemPolicy.reveal === "complete" || itemPolicy.requiredForParent || (options?.atomic !== "none" && isAtomic(current.element as z.ZodTypeAny));
+        const guarded = itemPolicy.reveal === "complete" || itemPolicy.requiredForParent || (options?.atomic !== "none" && isAtomic(inspected.element));
         const visible = !guarded || child.state === "complete";
         const item = visible ? value[visibleIndex++] : undefined;
-        return wrap(current.element as z.ZodTypeAny, item, child, [...path, index], options);
+        return wrap(inspected.element, item, child, [...path, index], options);
       });
     } else {
-      nested = value.map((item, index) => wrap(current.element as z.ZodTypeAny, item, children?.[index], [...path, index], options));
+      nested = value.map((item, index) => wrap(inspected.element, item, children?.[index], [...path, index], options));
     }
-  } else if (current instanceof z.ZodTuple && Array.isArray(value)) {
+  } else if (inspected.kind === "tuple" && Array.isArray(value)) {
     const children = node?.children as readonly CompletionNode[] | undefined;
-    const items = current.def.items as z.ZodTypeAny[];
+    const items = inspected.items;
     nested = value.map((item, index) => wrap(items[index] ?? z.unknown(), item, children?.[index], [...path, index], options));
-  } else if (current instanceof z.ZodRecord && isRecord(value)) {
+  } else if (inspected.kind === "record" && isRecord(value)) {
     const children = node?.children as Readonly<Record<string, CompletionNode>> | undefined;
-    nested = Object.fromEntries(Object.entries(value).map(([name, item]) => [name, wrap(current.valueType as z.ZodTypeAny, item, children?.[name], [...path, name], options)]));
+    nested = Object.fromEntries(Object.entries(value).map(([name, item]) => [name, wrap(inspected.value, item, children?.[name], [...path, name], options)]));
   }
   if (!options?.fields?.[policyPath(path)]?.withState) return nested;
   return { value: nested, state: node?.state ?? "pending" } satisfies StreamState<unknown>;
@@ -119,12 +121,13 @@ function project(
     return state.completed.has(key) ? state.completed.get(key) : HIDDEN;
   }
 
-  const unwrapped = unwrap(schema);
+  const unwrapped = unwrapZod(schema);
+  const inspected = inspectZod(unwrapped);
   let result: unknown = value;
 
-  if (unwrapped instanceof z.ZodObject && isRecord(value)) {
+  if (inspected.kind === "object" && isRecord(value)) {
     const output: Record<string, unknown> = {};
-    const shape = unwrapped.shape as Record<string, z.ZodTypeAny>;
+    const shape = inspected.shape;
     const children = node?.children as Readonly<Record<string, CompletionNode>> | undefined;
     for (const [name, childSchema] of Object.entries(shape)) {
       if (!(name in value)) continue;
@@ -133,17 +136,17 @@ function project(
     }
     if (!parentGateSatisfied(shape, output, path, options)) return HIDDEN;
     result = output;
-  } else if (unwrapped instanceof z.ZodArray && Array.isArray(value)) {
+  } else if (inspected.kind === "array" && Array.isArray(value)) {
     const children = node?.children as readonly CompletionNode[] | undefined;
     const output: unknown[] = [];
     for (let index = 0; index < value.length; index++) {
-      const child = project(unwrapped.element as z.ZodTypeAny, value[index], children?.[index], [...path, index], options, state, false);
+      const child = project(inspected.element, value[index], children?.[index], [...path, index], options, state, false);
       // Filtering avoids holes and misleading indexes for incomplete atomic elements.
       if (child !== HIDDEN) output.push(child);
     }
     result = output;
-  } else if (unwrapped instanceof z.ZodTuple && Array.isArray(value)) {
-    const items = unwrapped.def.items as z.ZodTypeAny[];
+  } else if (inspected.kind === "tuple" && Array.isArray(value)) {
+    const items = inspected.items;
     const children = node?.children as readonly CompletionNode[] | undefined;
     const output: unknown[] = [];
     for (let index = 0; index < Math.min(value.length, items.length); index++) {
@@ -151,23 +154,23 @@ function project(
       if (child !== HIDDEN) output.push(child);
     }
     result = output;
-  } else if (unwrapped instanceof z.ZodRecord && isRecord(value)) {
+  } else if (inspected.kind === "record" && isRecord(value)) {
     const children = node?.children as Readonly<Record<string, CompletionNode>> | undefined;
     const output: Record<string, unknown> = {};
     for (const [name, item] of Object.entries(value)) {
-      const child = project(unwrapped.valueType as z.ZodTypeAny, item, children?.[name], [...path, name], options, state, false);
+      const child = project(inspected.value, item, children?.[name], [...path, name], options, state, false);
       if (child !== HIDDEN) output[name] = child;
     }
     result = output;
-  } else if (unwrapped instanceof z.ZodDiscriminatedUnion) {
-    const discriminatorKey = (unwrapped.def as unknown as { discriminator: string }).discriminator;
-    const option = selectObjectOption(unwrapped.options as z.ZodTypeAny[], value, discriminatorKey);
+  } else if (inspected.kind === "union" && inspected.discriminator) {
+    const discriminatorKey = inspected.discriminator;
+    const option = selectObjectOption(inspected.options, value, discriminatorKey);
     // A discriminated union is not semantically visible until one exact, complete
     // discriminator selects its variant. This prevents premature variant guesses.
     if (!option) return HIDDEN;
     result = projectObjectOption(option, value, node, path, options, state, discriminatorKey);
-  } else if (unwrapped instanceof z.ZodUnion) {
-    const option = (unwrapped.options as z.ZodTypeAny[]).find((candidate) => candidate.safeParse(value).success);
+  } else if (inspected.kind === "union") {
+    const option = inspected.options.find((candidate) => structurallyAccepts(candidate, value));
     if (option) result = project(option, value, node, path, options, state, false);
   }
 
@@ -177,22 +180,23 @@ function project(
 
 function projectObjectOption(schema: z.ZodTypeAny, value: unknown, node: CompletionNode | undefined, path: (string | number)[], options: ParserOptions | undefined, state: SemanticProjectionState, discriminatorKey: string): unknown | Hidden {
   const object = unwrap(schema);
-  if (!(object instanceof z.ZodObject) || !isRecord(value)) return value;
+  const inspected = inspectZod(object);
+  if (inspected.kind !== "object" || !isRecord(value)) return value;
   const output: Record<string, unknown> = {};
   const children = node?.children as Readonly<Record<string, CompletionNode>> | undefined;
-  for (const [name, childSchema] of Object.entries(object.shape as Record<string, z.ZodTypeAny>)) {
+  for (const [name, childSchema] of Object.entries(inspected.shape)) {
     if (!(name in value)) continue;
     const child = project(childSchema, value[name], children?.[name], [...path, name], options, state, name === discriminatorKey);
     if (child !== HIDDEN) output[name] = child;
   }
-  if (!parentGateSatisfied(object.shape as Record<string, z.ZodTypeAny>, output, path, options)) return HIDDEN;
+  if (!parentGateSatisfied(inspected.shape, output, path, options)) return HIDDEN;
   return output;
 }
 
 function parentGateSatisfied(shape: Record<string, z.ZodTypeAny>, output: Record<string, unknown>, path: (string | number)[], options: ParserOptions | undefined): boolean {
   for (const [name, childSchema] of Object.entries(shape)) {
     if (!options?.fields?.[policyPath([...path, name])]?.requiredForParent) continue;
-    if (!(name in output) || !semanticallyPresent(output[name]) || !childSchema.safeParse(output[name]).success) return false;
+    if (!(name in output) || !semanticallyPresent(output[name]) || !structurallyAccepts(childSchema, output[name])) return false;
   }
   return true;
 }
@@ -205,19 +209,20 @@ function semanticallyPresent(value: unknown): boolean {
 }
 
 function resolvePolicyPath(schema: z.ZodTypeAny, parts: string[]): Array<{ target: z.ZodTypeAny; parent: z.ZodTypeAny }> {
-  const current = unwrap(schema);
-  if (current instanceof z.ZodUnion) {
-    return (current.options as z.ZodTypeAny[]).flatMap((option) => resolvePolicyPath(option, parts));
+  const current = unwrapZod(schema);
+  const inspected = inspectZod(current);
+  if (inspected.kind === "union") {
+    return inspected.options.flatMap((option) => resolvePolicyPath(option, parts));
   }
   const [head, ...tail] = parts;
   if (head === undefined) return [];
   let children: z.ZodTypeAny[] = [];
-  if (current instanceof z.ZodObject && head !== "*") {
-    const child = (current.shape as Record<string, z.ZodTypeAny>)[head];
+  if (inspected.kind === "object" && head !== "*") {
+    const child = inspected.shape[head];
     if (child) children = [child];
-  } else if (current instanceof z.ZodArray && head === "*") children = [current.element as z.ZodTypeAny];
-  else if (current instanceof z.ZodTuple && head === "*") children = [...(current.def.items as z.ZodTypeAny[])];
-  else if (current instanceof z.ZodRecord && head === "*") children = [current.valueType as z.ZodTypeAny];
+  } else if (inspected.kind === "array" && head === "*") children = [inspected.element];
+  else if (inspected.kind === "tuple" && head === "*") children = [...inspected.items];
+  else if (inspected.kind === "record" && head === "*") children = [inspected.value];
   if (tail.length === 0) return children.map((target) => ({ target, parent: current }));
   return children.flatMap((child) => resolvePolicyPath(child, tail));
 }
@@ -225,31 +230,22 @@ function resolvePolicyPath(schema: z.ZodTypeAny, parts: string[]): Array<{ targe
 function selectObjectOption(options: z.ZodTypeAny[], value: unknown, discriminatorKey: string): z.ZodTypeAny | undefined {
   if (!isRecord(value) || !(discriminatorKey in value)) return undefined;
   return options.find((option) => {
-    const object = unwrap(option);
-    if (!(object instanceof z.ZodObject)) return false;
-    const discriminator = (object.shape as Record<string, z.ZodTypeAny>)[discriminatorKey];
-    return discriminator?.safeParse(value[discriminatorKey]).success;
+    const object = unwrapZod(option);
+    const inspected = inspectZod(object);
+    if (inspected.kind !== "object") return false;
+    const discriminator = inspected.shape[discriminatorKey];
+    return discriminator ? structurallyAccepts(discriminator, value[discriminatorKey]) : false;
   });
 }
 
 function unwrap(schema: z.ZodTypeAny): z.ZodTypeAny {
-  let current = schema;
-  while (current instanceof z.ZodOptional || current instanceof z.ZodNullable || current instanceof z.ZodDefault || current instanceof z.ZodReadonly || current instanceof z.ZodCatch) {
-    current = current.unwrap() as z.ZodTypeAny;
-  }
-  if (current instanceof z.ZodPipe) return current.in as z.ZodTypeAny;
-  return current;
+  return unwrapZod(schema);
 }
 
 function isAtomic(schema: z.ZodTypeAny): boolean {
-  const current = unwrap(schema);
-  if (current instanceof z.ZodUnion) {
-    return (current.options as z.ZodTypeAny[]).every(isAtomic);
-  }
-  return current instanceof z.ZodNumber || current instanceof z.ZodBigInt ||
-    current instanceof z.ZodBoolean || current instanceof z.ZodNull ||
-    current instanceof z.ZodLiteral || current instanceof z.ZodEnum ||
-    current instanceof z.ZodDate;
+  const inspected = inspectZod(unwrapZod(schema));
+  if (inspected.kind === "union") return inspected.options.every(isAtomic);
+  return ["number", "bigint", "boolean", "null", "literal", "enum", "date"].includes(inspected.kind);
 }
 
 function policyPath(path: (string | number)[]): string {

@@ -20,6 +20,7 @@ import { coerceUnion, coerceOptional, coerceNullable, coerceDefault } from "./co
 import { coerceEnum, coerceNativeEnum } from "./coercers/enum.js";
 import { compileSchema } from "./schema.js";
 import { getYomiMetadata } from "./metadata.js";
+import { inspectZod, structurallyAccepts, zodCatchValue, zodDefaultValue } from "./zod-compat.js";
 
 /**
  * Coerce a value to match a Zod schema.
@@ -59,87 +60,83 @@ function coerceZodType(
   value: unknown,
   ctx: CoerceContext
 ): CoerceResult<unknown> {
-  if (schema instanceof z.ZodString) {
+  const inspected = inspectZod(schema);
+  if (inspected.kind === "string") {
     return coerceString(value, ctx);
   }
 
-  if (schema instanceof z.ZodNumber) {
+  if (inspected.kind === "number") {
     return coerceNumber(value, ctx);
   }
 
-  if (schema instanceof z.ZodBigInt) {
+  if (inspected.kind === "bigint") {
     return coerceInt(value, ctx);
   }
 
-  if (schema instanceof z.ZodBoolean) {
+  if (inspected.kind === "boolean") {
     return coerceBoolean(value, ctx);
   }
 
-  if (schema instanceof z.ZodNull) {
+  if (inspected.kind === "null") {
     return coerceNull(value, ctx);
   }
 
-  if (schema instanceof z.ZodUndefined) {
+  if (inspected.kind === "undefined") {
     if (value === undefined || value === null) {
       return { success: true, value: undefined, flags: ctx.flags };
     }
     return failure("Expected undefined", ctx, "undefined", describeType(value));
   }
 
-  if (schema instanceof z.ZodVoid) {
-    return { success: true, value: undefined, flags: ctx.flags };
-  }
-
-  if (schema instanceof z.ZodAny || schema instanceof z.ZodUnknown) {
+  if (inspected.kind === "unknown") {
     return { success: true, value, flags: ctx.flags };
   }
 
-  if (schema instanceof z.ZodNever) {
+  if (inspected.kind === "never") {
     return failure("ZodNever cannot match any value", ctx, "never", describeType(value));
   }
 
-  if (schema instanceof z.ZodLiteral) {
-    // v4 changed from single value to Set to support z.literal("a", "b")
-    const literalValue = schema.values.values().next().value as string | number | boolean;
+  if (inspected.kind === "literal") {
+    const literalValue = inspected.values[0] as string | number | boolean;
     return coerceLiteral(value, literalValue, ctx);
   }
 
-  if (schema instanceof z.ZodArray) {
-    const elementSchema = schema.element as z.ZodTypeAny;
+  if (inspected.kind === "array" && schema instanceof z.ZodArray) {
+    const elementSchema = inspected.element;
     return coerceArray(value, (v, c) => coerceZodType(elementSchema, v, c), ctx);
   }
 
-  if (schema instanceof z.ZodTuple) {
-    // v4 exposes items via def, not as a direct property
-    const items = schema.def.items as z.ZodTypeAny[];
+  if (inspected.kind === "tuple") {
+    const items = inspected.items;
     const coercers = items.map(
       (item) => (v: unknown, c: CoerceContext) => coerceZodType(item, v, c)
     );
     return coerceTuple(value, coercers, ctx);
   }
 
-  if (schema instanceof z.ZodObject) {
-    const shape = schema.shape as Record<string, z.ZodTypeAny>;
+  if (inspected.kind === "object") {
+    const shape = inspected.shape;
     const objectSchema: ObjectSchema = {};
 
     for (const [key, propSchema] of Object.entries(shape)) {
       const isOptional = propSchema.isOptional();
-      const hasDefault = propSchema instanceof z.ZodDefault;
+      const propInspection = inspectZod(propSchema);
+      const hasDefault = propInspection.kind === "default";
 
       objectSchema[key] = {
         coercer: (v, c) => coerceZodType(propSchema, v, c),
         optional: isOptional,
         aliases: getYomiMetadata(propSchema).aliases,
         // v4 changed defaultValue from function to direct value
-        ...(hasDefault ? { default: (propSchema.def as { defaultValue: unknown }).defaultValue } : {}),
+        ...(hasDefault ? { default: zodDefaultValue(propSchema) } : {}),
       };
     }
 
     return coerceObject(value, objectSchema, ctx);
   }
 
-  if (schema instanceof z.ZodRecord) {
-    const valueSchema = schema.valueType as z.ZodTypeAny;
+  if (inspected.kind === "record" && schema instanceof z.ZodRecord) {
+    const valueSchema = inspected.value;
     return coerceRecord(value, (v, c) => coerceZodType(valueSchema, v, c), ctx);
   }
 
@@ -149,50 +146,50 @@ function coerceZodType(
     return coerceRecord(value, (v, c) => coerceZodType(valueSchema, v, c), ctx);
   }
 
-  if (schema instanceof z.ZodDiscriminatedUnion) {
-    const options = schema.options as z.ZodTypeAny[];
-    const discriminator = (schema.def as unknown as { discriminator: string }).discriminator;
+  if (inspected.kind === "union" && inspected.discriminator) {
+    const options = inspected.options;
+    const discriminator = inspected.discriminator;
     let eligible = options.map((option, index) => ({ option, index }));
     if (typeof value === "object" && value !== null && !Array.isArray(value)) {
       const discriminatorValue = (value as Record<string, unknown>)[discriminator];
       const exact = eligible.filter(({ option }) => {
-        if (!(option instanceof z.ZodObject)) return false;
-        const discriminatorSchema = (option.shape as Record<string, z.ZodTypeAny>)[discriminator];
-        return discriminatorSchema?.safeParse(discriminatorValue).success === true;
+        const optionInspection = inspectZod(option);
+        if (optionInspection.kind !== "object") return false;
+        const discriminatorSchema = optionInspection.shape[discriminator];
+        return discriminatorSchema ? structurallyAccepts(discriminatorSchema, discriminatorValue) : false;
       });
       if (exact.length > 0) eligible = exact;
     }
     const candidates = eligible.map(({ option, index }) => ({
       index,
       coercer: (v: unknown, c: CoerceContext) => coerceZodType(option, v, c),
-      validate: (v: unknown) => option.safeParse(v),
+      validate: (v: unknown) => ({ success: structurallyAccepts(option, v) }),
     }));
     return coerceUnion(value, candidates, ctx);
   }
 
-  if (schema instanceof z.ZodUnion) {
-    const options = schema.options as z.ZodTypeAny[];
+  if (inspected.kind === "union") {
+    const options = inspected.options;
     const candidates = options.map((option) => ({
       coercer: (v: unknown, c: CoerceContext) => coerceZodType(option, v, c),
-      validate: (v: unknown) => option.safeParse(v),
+      validate: (v: unknown) => ({ success: structurallyAccepts(option, v) }),
     }));
     return coerceUnion(value, candidates, ctx);
   }
 
-  if (schema instanceof z.ZodOptional) {
-    const innerSchema = schema.unwrap() as z.ZodTypeAny;
+  if (inspected.kind === "optional") {
+    const innerSchema = inspected.inner;
     return coerceOptional(value, (v, c) => coerceZodType(innerSchema, v, c), ctx);
   }
 
-  if (schema instanceof z.ZodNullable) {
-    const innerSchema = schema.unwrap() as z.ZodTypeAny;
+  if (inspected.kind === "nullable") {
+    const innerSchema = inspected.inner;
     return coerceNullable(value, (v, c) => coerceZodType(innerSchema, v, c), ctx);
   }
 
-  if (schema instanceof z.ZodDefault) {
-    const innerSchema = schema.removeDefault() as z.ZodTypeAny;
-    // v4 changed defaultValue from function to direct value
-    const defaultValue = (schema.def as { defaultValue: unknown }).defaultValue;
+  if (inspected.kind === "default") {
+    const innerSchema = inspected.inner;
+    const defaultValue = zodDefaultValue(schema);
     return coerceDefault(
       value,
       (v, c) => coerceZodType(innerSchema, v, c),
@@ -201,13 +198,12 @@ function coerceZodType(
     );
   }
 
-  if (schema instanceof z.ZodCatch) {
-    const innerSchema = schema.removeCatch() as z.ZodTypeAny;
+  if (inspected.kind === "catch") {
+    const innerSchema = inspected.inner;
     const result = coerceZodType(innerSchema, value, ctx);
     if (result.success) return result;
     // v4 catchValue requires error/value/input/issues context
-    const catchDef = schema.def as unknown as { catchValue: (ctx: { error: z.ZodError; value: unknown; input: unknown; issues: z.ZodIssue[] }) => unknown };
-    const catchValue = catchDef.catchValue({ error: new z.ZodError([]), value, input: value, issues: [] });
+    const catchValue = zodCatchValue(schema, value);
     return { success: true, value: catchValue, flags: ctx.flags };
   }
 
@@ -225,25 +221,23 @@ function coerceZodType(
     return coerceEnum(value, schemaAny.options, ctx, enumAliases);
   }
 
-  if (schema instanceof z.ZodLazy) {
-    const lazyDef = schema.def as unknown as { getter: () => z.ZodTypeAny };
-    const lazySchema = lazyDef.getter();
+  if (inspected.kind === "lazy") {
+    const lazySchema = inspected.get();
     return coerceZodType(lazySchema, value, ctx);
   }
 
-  if (schema instanceof z.ZodPipe) {
+  if (inspected.kind === "pipe") {
     // Coerce only the input side. The public validation boundary executes the
     // complete pipe exactly once, including refinements and transforms.
-    const inSchema = schema.in as z.ZodTypeAny;
+    const inSchema = inspected.input;
     return coerceZodType(inSchema, value, ctx);
   }
 
-  if (schema instanceof z.ZodReadonly) {
-    const readonlyDef = schema.def as unknown as { innerType: z.ZodTypeAny };
-    return coerceZodType(readonlyDef.innerType, value, ctx);
+  if (inspected.kind === "readonly") {
+    return coerceZodType(inspected.inner, value, ctx);
   }
 
-  if (schema instanceof z.ZodDate) {
+  if (inspected.kind === "date") {
     if (value instanceof Date) {
       if (isNaN(value.getTime())) {
         return failure("Invalid Date", ctx, "Date", "Invalid Date");
@@ -261,11 +255,10 @@ function coerceZodType(
     return failure("Expected Date", ctx, "Date", describeType(value));
   }
 
-  if (schema instanceof z.ZodIntersection) {
-    const intersectionDef = schema.def as unknown as { left: z.ZodTypeAny; right: z.ZodTypeAny };
-    const leftResult = coerceZodType(intersectionDef.left, value, ctx);
+  if (inspected.kind === "intersection") {
+    const leftResult = coerceZodType(inspected.left, value, ctx);
     if (!leftResult.success) return leftResult;
-    const rightResult = coerceZodType(intersectionDef.right, leftResult.value, ctx);
+    const rightResult = coerceZodType(inspected.right, leftResult.value, ctx);
     if (!rightResult.success) return rightResult;
     // Merge object results since intersection typically combines object types
     if (typeof leftResult.value === "object" && typeof rightResult.value === "object") {

@@ -59,3 +59,87 @@ export function inspectZod(schema: z.ZodTypeAny): InspectedZod {
 export function zodDescription(schema: z.ZodTypeAny): string | undefined {
   return schema.description;
 }
+
+export function zodDefaultValue(schema: z.ZodTypeAny): unknown {
+  return (schema.def as unknown as { defaultValue: unknown }).defaultValue;
+}
+
+export function zodCatchValue(schema: z.ZodTypeAny, value: unknown): unknown {
+  const fn = (schema.def as unknown as { catchValue: (ctx: { error: z.ZodError; value: unknown; input: unknown; issues: z.ZodIssue[] }) => unknown }).catchValue;
+  return fn({ error: new z.ZodError([]), value, input: value, issues: [] });
+}
+
+/** Remove input-transparent wrappers without exposing Zod internals to consumers. */
+export function unwrapZod(schema: z.ZodTypeAny): z.ZodTypeAny {
+  let current = schema;
+  for (;;) {
+    const inspected = inspectZod(current);
+    if (inspected.kind === "optional" || inspected.kind === "nullable" || inspected.kind === "readonly" || inspected.kind === "default" || inspected.kind === "catch") {
+      current = inspected.inner;
+      continue;
+    }
+    return inspected.kind === "pipe" ? inspected.input : current;
+  }
+}
+
+/**
+ * Side-effect-free compatibility check used while ranking union candidates.
+ * It deliberately checks only JSON-visible structure: refinements and transforms
+ * belong to the single, final public safeParse boundary.
+ */
+export function structurallyAccepts(schema: z.ZodTypeAny, value: unknown, seen = new WeakSet<object>()): boolean {
+  const inspected = inspectZod(schema);
+  switch (inspected.kind) {
+    case "optional": return value === undefined || structurallyAccepts(inspected.inner, value, seen);
+    case "nullable": return value === null || structurallyAccepts(inspected.inner, value, seen);
+    case "default": case "catch": case "readonly": return structurallyAccepts(inspected.inner, value, seen);
+    case "pipe": return structurallyAccepts(inspected.input, value, seen);
+    case "lazy": return structurallyAccepts(inspected.get(), value, seen);
+    case "string": return typeof value === "string" && builtInChecksAccept(schema, value);
+    case "number": return typeof value === "number" && Number.isFinite(value) && builtInChecksAccept(schema, value);
+    case "bigint": return typeof value === "bigint";
+    case "boolean": return typeof value === "boolean";
+    case "null": return value === null;
+    case "undefined": return value === undefined;
+    case "never": return false;
+    case "date": return value instanceof Date && !Number.isNaN(value.getTime());
+    case "literal": return inspected.values.some((item) => Object.is(item, value));
+    case "enum": return inspected.values.some((item) => Object.is(item, value));
+    case "unknown": return true;
+    case "array": return Array.isArray(value) && value.every((item) => structurallyAccepts(inspected.element, item, seen));
+    case "tuple": return Array.isArray(value) && value.length >= inspected.items.length && value.every((item, index) => structurallyAccepts(inspected.items[index] ?? inspected.rest ?? z.never(), item, seen));
+    case "record": return isObject(value) && Object.values(value).every((item) => structurallyAccepts(inspected.value, item, seen));
+    case "object": {
+      if (!isObject(value)) return false;
+      if (seen.has(value)) return true;
+      seen.add(value);
+      return Object.entries(inspected.shape).every(([key, child]) => key in value ? structurallyAccepts(child, value[key], seen) : child.isOptional());
+    }
+    case "union": return inspected.options.some((option) => structurallyAccepts(option, value, seen));
+    case "intersection": return structurallyAccepts(inspected.left, value, seen) && structurallyAccepts(inspected.right, value, seen);
+    case "unsupported": return true;
+  }
+}
+
+/** Evaluate declarative built-in checks only; custom checks are intentionally deferred. */
+function builtInChecksAccept(schema: z.ZodTypeAny, value: string | number): boolean {
+  const checks = (schema.def as unknown as { checks?: unknown[] }).checks ?? [];
+  return checks.every((check) => {
+    const def = (check as { _zod?: { def?: Record<string, unknown> } })._zod?.def;
+    if (!def || def.check === "custom") return true;
+    switch (def.check) {
+      case "greater_than": return typeof value === "number" && (def.inclusive ? value >= (def.value as number) : value > (def.value as number));
+      case "less_than": return typeof value === "number" && (def.inclusive ? value <= (def.value as number) : value < (def.value as number));
+      case "multiple_of": return typeof value === "number" && value % (def.value as number) === 0;
+      case "min_length": return typeof value === "string" && value.length >= (def.minimum as number);
+      case "max_length": return typeof value === "string" && value.length <= (def.maximum as number);
+      case "length_equals": return typeof value === "string" && value.length === (def.length as number);
+      case "string_format": return typeof value === "string" && (!(def.pattern instanceof RegExp) || new RegExp(def.pattern.source, def.pattern.flags).test(value));
+      default: return true;
+    }
+  });
+}
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}

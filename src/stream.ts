@@ -14,8 +14,13 @@ export type DeepPartial<T> =
   T extends readonly (infer U)[] ? DeepPartial<U>[] :
   T extends object ? { [K in keyof T]?: DeepPartial<T[K]> } : T;
 
+/** Sound projection type for streams using one or more `withState` policies. */
+type StatefulValue<T> = T extends readonly (infer U)[] ? StatefulDeepPartial<U>[] :
+  T extends object ? { [K in keyof T]?: StatefulDeepPartial<T[K]> } : T;
+export type StatefulDeepPartial<T> = StatefulValue<T> | import("./semantic.js").StreamState<StatefulValue<T>>;
+
 export interface StreamSnapshot<T> {
-  data: DeepPartial<T>;
+  data: T;
   flags: FlagWithContext[];
   diagnostics: Diagnostic[];
   /** Lexical completion based only on delimiters emitted by the producer. */
@@ -32,8 +37,8 @@ export type StreamPushResult<T> =
   | { success: false; pending: true; completion: CompletionNode; error?: CoerceError }
   | { success: false; pending: false; error: ParseError };
 
-export interface StreamParser<T> {
-  push(chunk: string | Uint8Array): StreamPushResult<T>;
+export interface StreamParser<T, Projection = DeepPartial<T>> {
+  push(chunk: string | Uint8Array): StreamPushResult<Projection>;
   finish(): ParseResult<T>;
   readonly text: string;
   /** Stable counters suitable for regression assertions and profiling. */
@@ -57,52 +62,60 @@ export interface StreamWorkMetrics {
  * A push may be pending when no meaningful root value is repairable yet.
  * finish() always runs Yomi's strict, final parser and is the validation boundary.
  */
-export function createStreamParser<S extends z.ZodTypeAny>(
+export function createStreamParser<S extends z.ZodTypeAny>(schema: S, options?: ParserOptions<z.infer<S>> & { fields?: undefined }): StreamParser<z.infer<S>, DeepPartial<z.infer<S>>>;
+export function createStreamParser<S extends z.ZodTypeAny, Projection = StatefulDeepPartial<z.infer<S>>>(schema: S, options: ParserOptions<z.infer<S>>): StreamParser<z.infer<S>, Projection>;
+export function createStreamParser<S extends z.ZodTypeAny, Projection = DeepPartial<z.infer<S>>>(
   schema: S,
   options?: ParserOptions<z.infer<S>>
-): StreamParser<z.infer<S>> {
+): StreamParser<z.infer<S>, Projection> {
   const limits = resolveLimits(options);
   validateStreamPolicies(schema, options);
   let buffer = "";
   let receivedBytes = 0;
   const decoder = new TextDecoder();
+  const encoder = new TextEncoder();
   const semanticState = createSemanticProjectionState();
   let revision = 0;
   let previousSemantic: string | undefined;
-  let previousSnapshot: StreamSnapshot<z.infer<S>> | undefined;
+  let previousSnapshot: StreamSnapshot<Projection> | undefined;
   const work = { candidateAttempts: 0 };
   const metrics: StreamWorkMetrics = {
     inputBytes: 0, parseAttempts: 0, cumulativeParsedBytes: 0,
     completionScannedCharacters: 0, repairAttempts: 0,
     candidateAttempts: 0, snapshotCount: 0, retainedBytes: 0,
   };
+  const inspectAttempt = () => {
+    const parsedBytes = encoder.encode(buffer).byteLength;
+    metrics.parseAttempts++;
+    metrics.cumulativeParsedBytes += parsedBytes;
+    metrics.retainedBytes = parsedBytes;
+    const parsed = parseJson(buffer, limits, metrics);
+    inspectValue(parsed.value, limits);
+    const ctx = createContext(limits, work);
+    ctx.unionTieBreaker = options?.unionTieBreaker;
+    ctx.flags.push(...parsed.flags);
+    return { parsed, ctx };
+  };
 
   return {
     get text() { return buffer; },
     get metrics() { return Object.freeze({ ...metrics, candidateAttempts: work.candidateAttempts }); },
     push(chunk) {
-      receivedBytes += typeof chunk === "string" ? new TextEncoder().encode(chunk).byteLength : chunk.byteLength;
+      receivedBytes += typeof chunk === "string" ? encoder.encode(chunk).byteLength : chunk.byteLength;
       if (receivedBytes > limits.maxInputBytes) {
         const error = new ResourceLimitError("maxInputBytes", limits.maxInputBytes);
         return { success: false, pending: false, error: { type: "resource_limit_error", message: error.message, budget: error.budget, limit: error.limit } };
       }
       buffer += typeof chunk === "string" ? chunk : decoder.decode(chunk, { stream: true });
       metrics.inputBytes = receivedBytes;
-      metrics.retainedBytes = receivedBytes;
       metrics.completionScannedCharacters += buffer.length;
       const completion = inspectCompletion(buffer);
       try {
-        metrics.parseAttempts++;
-        metrics.cumulativeParsedBytes += new TextEncoder().encode(buffer).byteLength;
-        const parsed = parseJson(buffer, limits, metrics);
-        inspectValue(parsed.value, limits);
+        const { parsed, ctx } = inspectAttempt();
         const visible = projectStreamingValue(schema, parsed.value, completion, options, semanticState);
-        const ctx = createContext(limits, work);
-        ctx.unionTieBreaker = options?.unionTieBreaker;
-        ctx.flags.push(...parsed.flags);
         const result = coercePartialToSchema(schema, visible, ctx);
         if (!result.success) return { success: false, pending: true, completion, error: result.error };
-        const data = applyStateWrappers(schema, result.value, completion, options) as DeepPartial<z.infer<S>>;
+        const data = applyStateWrappers(schema, result.value, completion, options) as Projection;
         const semantic = stableSemanticString([data, completion]);
         if (semantic === previousSemantic && previousSnapshot) return { success: true, snapshot: previousSnapshot };
         const snapshot = deepFreeze({
@@ -130,15 +143,8 @@ export function createStreamParser<S extends z.ZodTypeAny>(
     },
     finish() {
       buffer += decoder.decode();
-      metrics.retainedBytes = new TextEncoder().encode(buffer).byteLength;
       try {
-        metrics.parseAttempts++;
-        metrics.cumulativeParsedBytes += metrics.retainedBytes;
-        const parsed = parseJson(buffer, limits, metrics);
-        inspectValue(parsed.value, limits);
-        const ctx = createContext(limits, work);
-        ctx.unionTieBreaker = options?.unionTieBreaker;
-        ctx.flags.push(...parsed.flags);
+        const { parsed, ctx } = inspectAttempt();
         const result = coerceToSchema(schema, parsed.value, ctx);
         if (result.success) {
           const validated = schema.safeParse(result.value);
@@ -182,12 +188,12 @@ export function createStreamParser<S extends z.ZodTypeAny>(
 }
 
 /** Consume any async stream of text/bytes and yield each parseable snapshot. */
-export async function* parseStream<S extends z.ZodTypeAny>(
+export async function* parseStream<S extends z.ZodTypeAny, Projection = DeepPartial<z.infer<S>>>(
   schema: S,
   chunks: AsyncIterable<string | Uint8Array>,
   options?: ParserOptions<z.infer<S>>
-): AsyncGenerator<StreamSnapshot<z.infer<S>>, ParseResult<z.infer<S>>, void> {
-  const parser = createStreamParser(schema, options);
+): AsyncGenerator<StreamSnapshot<Projection>, ParseResult<z.infer<S>>, void> {
+  const parser = createStreamParser<S, Projection>(schema, options ?? {});
   let revision = 0;
   for await (const chunk of chunks) {
     const result = parser.push(chunk);

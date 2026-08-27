@@ -3,6 +3,16 @@ import { z } from "zod";
 import { coerce, parse } from "../src/index.js";
 
 describe("schema-scored union selection", () => {
+  it("executes the selected transform exactly once", () => {
+    let calls = 0;
+    const schema = z.union([
+      z.string().transform((value) => { calls++; return `selected:${value}`; }),
+      z.number().transform((value) => { calls++; return value + 1; }),
+    ]);
+    const result = parse(schema, '"hello"');
+    expect(result.success && result.data).toBe("selected:hello");
+    expect(calls).toBe(1);
+  });
   it("is independent of declaration order when one candidate is exact", () => {
     for (const schema of [z.union([z.string(), z.number()]), z.union([z.number(), z.string()])]) {
       const result = coerce(schema, 42);
