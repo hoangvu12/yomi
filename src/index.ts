@@ -10,6 +10,7 @@ export { Flag, type FlagWithContext } from "./flags.js";
 export { type CoerceResult, type CoerceSuccess, type CoerceFailure, type CoerceError } from "./types.js";
 export { JsonParseError } from "./parse.js";
 export { DEFAULT_PARSER_LIMITS, ResourceLimitError, type Diagnostic, type ParserLimits, type ParserOptions, type ParserBudget } from "./diagnostics.js";
+export { compileSchema, renderFormat, schemaFingerprint, SCHEMA_CONTRACT_VERSION, type CompiledNode, type CompiledSchema, type CompileSchemaOptions, type RenderFormatResult } from "./schema.js";
 export {
   createStreamParser,
   parseStream,
@@ -188,7 +189,7 @@ export function coerce<T extends z.ZodTypeAny>(
     throw e;
   }
   if (!result.success) {
-    result.diagnostics = diagnosticsFromFlags(ctx.flags, limits);
+    result.diagnostics = [...(result.diagnostics ?? []), ...diagnosticsFromFlags(ctx.flags, limits)];
     return result;
   }
   result.diagnostics = diagnosticsFromFlags(result.flags, limits);

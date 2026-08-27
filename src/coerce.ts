@@ -18,6 +18,7 @@ import { coerceArray, coerceTuple } from "./coercers/array.js";
 import { coerceObject, coerceRecord, type ObjectSchema } from "./coercers/object.js";
 import { coerceUnion, coerceOptional, coerceNullable, coerceDefault } from "./coercers/union.js";
 import { coerceEnum, coerceNativeEnum } from "./coercers/enum.js";
+import { compileSchema } from "./schema.js";
 
 /**
  * Coerce a value to match a Zod schema.
@@ -29,6 +30,12 @@ export function coerceToSchema<T extends z.ZodTypeAny>(
   ctx?: CoerceContext
 ): CoerceResult<z.infer<T>> {
   const context = ctx ?? createContext();
+  const compileDiagnostic = compileSchema(schema).diagnostics.find((item) => item.severity === "error");
+  if (compileDiagnostic) {
+    const result = failure(`Unsupported Zod schema: ${compileDiagnostic.evidence ?? compileDiagnostic.code}`, context, "supported Zod schema", schema.constructor.name);
+    result.diagnostics = [compileDiagnostic];
+    return result;
+  }
   return coerceZodType(schema, value, context) as CoerceResult<z.infer<T>>;
 }
 
