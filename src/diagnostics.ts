@@ -48,6 +48,16 @@ export type ParserOptions<T = unknown> = {
   atomic?: "safe-defaults" | "none";
 };
 
+/** Contract-affecting parser policies, normalized to stable public identities. */
+export function parserContractPolicies(options?: ParserOptions<any>): unknown {
+  return {
+    fields: options?.fields ?? null,
+    atomic: options?.atomic ?? null,
+    unionTieBreaker: options?.unionTieBreaker ?? null,
+    advisoryChecks: options?.advisoryChecks?.map(({ name }) => name) ?? [],
+  };
+}
+
 export const DEFAULT_PARSER_LIMITS: Readonly<ParserLimits> = Object.freeze({
   maxInputBytes: 1_048_576,
   maxNestingDepth: 64,

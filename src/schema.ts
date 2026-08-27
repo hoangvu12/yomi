@@ -2,6 +2,8 @@ import type { z } from "zod";
 import type { Diagnostic } from "./diagnostics.js";
 import { inspectZod, zodDescription } from "./zod-compat.js";
 import { getYomiMetadata } from "./metadata.js";
+import type { ParserOptions } from "./diagnostics.js";
+import { parserContractPolicies } from "./diagnostics.js";
 
 export const SCHEMA_CONTRACT_VERSION = "yomi-schema-v1";
 
@@ -150,3 +152,8 @@ export function renderFormat(schema: z.ZodTypeAny, options?: CompileSchemaOption
 }
 
 export function schemaFingerprint(schema: z.ZodTypeAny, options?: CompileSchemaOptions): string { return compileSchema(schema, options).fingerprint; }
+
+/** Fingerprint the schema together with every parser policy that changes its contract. */
+export function parserContractFingerprint(schema: z.ZodTypeAny, options?: ParserOptions<any>): string {
+  return compileSchema(schema, { policies: parserContractPolicies(options) }).fingerprint;
+}

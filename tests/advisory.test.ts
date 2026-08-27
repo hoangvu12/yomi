@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
-import { advisoryPolicyFingerprint, createStreamParser, parse } from "../src/index.js";
+import { advisoryPolicyFingerprint, createStreamParser, parse, parserContractFingerprint } from "../src/index.js";
 
 describe("advisory validation", () => {
   it("reports passing and failing named checks without changing data", () => {
@@ -61,5 +61,15 @@ describe("advisory validation", () => {
     expect(() => parse(z.string(), '"ok"', { advisoryChecks: [
       { name: "same", check: () => true }, { name: "same", check: () => true },
     ] })).toThrow(/Duplicate advisory check name/);
+  });
+
+  it("includes advisory identities in the main parser contract fingerprint", () => {
+    const schema = z.object({ value: z.string() });
+    const a = parserContractFingerprint(schema, { advisoryChecks: [{ name: "quality-v1", check: () => true }] });
+    const same = parserContractFingerprint(schema, { advisoryChecks: [{ name: "quality-v1", check: () => false }] });
+    const b = parserContractFingerprint(schema, { advisoryChecks: [{ name: "quality-v2", check: () => true }] });
+    expect(a).toBe(same);
+    expect(a).not.toBe(parserContractFingerprint(schema));
+    expect(a).not.toBe(b);
   });
 });
