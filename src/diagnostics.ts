@@ -102,6 +102,7 @@ const COST: Partial<Record<Flag, number>> = {
   [Flag.IntToFloat]: 2,
   [Flag.NullToUndefined]: 2,
   [Flag.EnumCaseInsensitive]: 2,
+  [Flag.AliasUsed]: 1,
   [Flag.SingleToArray]: 3,
   [Flag.ArrayToSingle]: 3,
 };

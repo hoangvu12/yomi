@@ -15,7 +15,8 @@ import {
 export function coerceEnum<T extends string>(
   value: unknown,
   allowedValues: readonly T[],
-  ctx: CoerceContext
+  ctx: CoerceContext,
+  aliases: Readonly<Record<string, readonly string[]>> = {},
 ): CoerceResult<T> {
   if (typeof value !== "string") {
     return failure(
@@ -29,6 +30,13 @@ export function coerceEnum<T extends string>(
   // Fast path: exact match
   if (allowedValues.includes(value as T)) {
     return success(value as T, ctx);
+  }
+
+  for (const canonical of allowedValues) {
+    if (aliases[canonical]?.includes(value)) {
+      addFlag(ctx, { flag: Flag.AliasUsed, input: value, matched: canonical });
+      return success(canonical, ctx);
+    }
   }
 
   // Fallback: case-insensitive match

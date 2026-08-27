@@ -39,6 +39,7 @@ export enum Flag {
 
   // LLM returned "RED" but schema expects "red" - close enough
   EnumCaseInsensitive = "enum_case_insensitive",
+  AliasUsed = "alias_used",
 }
 
 /**
@@ -49,7 +50,8 @@ export type FlagWithContext = (
   | { flag: Flag.ExtraKeysIgnored; keys: string[] }
   | { flag: Flag.FloatToInt; original: number; rounded: number }
   | { flag: Flag.EnumCaseInsensitive; input: string; matched: string }
-  | { flag: Exclude<Flag, Flag.ExtraKeysIgnored | Flag.FloatToInt | Flag.EnumCaseInsensitive> }) & { path?: (string | number)[] };
+  | { flag: Flag.AliasUsed; input: string; matched: string }
+  | { flag: Exclude<Flag, Flag.ExtraKeysIgnored | Flag.FloatToInt | Flag.EnumCaseInsensitive | Flag.AliasUsed> }) & { path?: (string | number)[] };
 
 export function flag(f: Flag): FlagWithContext {
   return { flag: f } as FlagWithContext;

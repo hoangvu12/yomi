@@ -19,6 +19,7 @@ import { coerceObject, coerceRecord, type ObjectSchema } from "./coercers/object
 import { coerceUnion, coerceOptional, coerceNullable, coerceDefault } from "./coercers/union.js";
 import { coerceEnum, coerceNativeEnum } from "./coercers/enum.js";
 import { compileSchema } from "./schema.js";
+import { getYomiMetadata } from "./metadata.js";
 
 /**
  * Coerce a value to match a Zod schema.
@@ -128,6 +129,7 @@ function coerceZodType(
       objectSchema[key] = {
         coercer: (v, c) => coerceZodType(propSchema, v, c),
         optional: isOptional,
+        aliases: getYomiMetadata(propSchema).aliases,
         // v4 changed defaultValue from function to direct value
         ...(hasDefault ? { default: (propSchema.def as { defaultValue: unknown }).defaultValue } : {}),
       };
@@ -212,10 +214,15 @@ function coerceZodType(
   if (schema instanceof z.ZodEnum) {
     // v4 uses ZodEnum for both z.enum() and z.nativeEnum() - differentiate by 'enum' property
     const schemaAny = schema as unknown as { enum?: Record<string, string | number>; options: string[] };
+    const enumAliases = getYomiMetadata(schema).enumAliases;
+    if (enumAliases && schemaAny.options.every((item) => typeof item === "string")) {
+      const aliased = coerceEnum(value, schemaAny.options, ctx, enumAliases);
+      if (aliased.success || typeof value === "string") return aliased;
+    }
     if (schemaAny.enum && typeof schemaAny.enum === 'object' && !Array.isArray(schemaAny.enum)) {
       return coerceNativeEnum(value, schemaAny.enum, ctx);
     }
-    return coerceEnum(value, schemaAny.options, ctx);
+    return coerceEnum(value, schemaAny.options, ctx, enumAliases);
   }
 
   if (schema instanceof z.ZodLazy) {

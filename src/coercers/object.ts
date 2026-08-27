@@ -16,6 +16,7 @@ export interface ObjectSchema {
     coercer: PropertyCoercer<unknown>;
     optional: boolean;
     default?: unknown;
+    aliases?: readonly string[];
   };
 }
 
@@ -53,9 +54,11 @@ export function coerceObject<T extends Record<string, unknown>>(
     if (!propSchema) continue;
 
     const propCtx = childContext(ctx, key);
-    const inputValue = value[key];
+    const alias = propSchema.aliases?.find((name) => Object.prototype.hasOwnProperty.call(value, name));
+    const sourceKey = Object.prototype.hasOwnProperty.call(value, key) ? key : alias;
+    const inputValue = sourceKey === undefined ? undefined : value[sourceKey];
 
-    if (!(key in value) || inputValue === undefined) {
+    if (sourceKey === undefined || inputValue === undefined) {
       if (ctx.partial) {
         continue;
       }
@@ -73,13 +76,17 @@ export function coerceObject<T extends Record<string, unknown>>(
       }
     }
 
+    if (sourceKey !== key) addFlag(propCtx, { flag: Flag.AliasUsed, input: sourceKey, matched: key });
+
     const propResult = propSchema.coercer(inputValue, propCtx);
     if (!propResult.success) {
       return propResult;
     }
 
     result[key] = propResult.value;
-    inputKeys.delete(key);
+    inputKeys.delete(sourceKey);
+    // Canonical keys win; a simultaneously supplied alias is ignored, not an extra key.
+    for (const name of propSchema.aliases ?? []) inputKeys.delete(name);
   }
 
   // Track extra keys so callers know the LLM added unrequested fields
