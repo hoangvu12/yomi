@@ -14,6 +14,7 @@ export { DEFAULT_PARSER_LIMITS, ResourceLimitError, type Diagnostic, type Parser
 export { advisoryPolicyFingerprint, type AdvisoryCheck, type AdvisoryCheckOutcome, type AdvisoryReport, type AdvisoryStatus } from "./advisory.js";
 export { inspectCompletion, type CompletionNode, type CompletionState } from "./syntax.js";
 export { compileSchema, renderFormat, schemaFingerprint, SCHEMA_CONTRACT_VERSION, type CompiledNode, type CompiledSchema, type CompileSchemaOptions, type RenderFormatResult } from "./schema.js";
+export { yomi, type YomiMetadata, type YomiSchema } from "./metadata.js";
 export {
   createStreamParser,
   parseStream,
