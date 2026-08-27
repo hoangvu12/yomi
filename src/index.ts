@@ -11,6 +11,7 @@ export { type CoerceResult, type CoerceSuccess, type CoerceFailure, type CoerceE
 export { JsonParseError } from "./parse.js";
 export { DEFAULT_PARSER_LIMITS, ResourceLimitError, type Diagnostic, type ParserLimits, type ParserOptions, type ParserBudget, type UnionTieBreaker } from "./diagnostics.js";
 export { inspectCompletion, type CompletionNode, type CompletionState } from "./syntax.js";
+export { compileSchema, renderFormat, schemaFingerprint, SCHEMA_CONTRACT_VERSION, type CompiledNode, type CompiledSchema, type CompileSchemaOptions, type RenderFormatResult } from "./schema.js";
 export {
   createStreamParser,
   parseStream,
