@@ -17,6 +17,13 @@ export { type StreamState, type StreamStateName } from "./semantic.js";
 export { compileSchema, renderFormat, schemaFingerprint, SCHEMA_CONTRACT_VERSION, type CompiledNode, type CompiledSchema, type CompileSchemaOptions, type RenderFormatResult } from "./schema.js";
 export { yomi, type YomiMetadata, type YomiSchema } from "./metadata.js";
 export {
+  adaptProviderEvents,
+  UnknownProviderEventError,
+  type ProviderAdapterOptions,
+  type ProviderEventMapping,
+  type UnknownProviderEventPolicy,
+} from "./provider-adapter.js";
+export {
   createStreamParser,
   parseStream,
   type DeepPartial,

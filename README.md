@@ -141,6 +141,35 @@ calling `push()` to avoid unnecessary repeated work. Snapshots are deeply frozen
 carry a monotonic `revision`; semantically unchanged pushes reuse the prior revision,
 and `parseStream` does not yield those duplicates.
 
+#### Provider event adapters
+
+Provider SDKs can remain outside Yomi by translating their events with
+`adaptProviderEvents`. The mapper must classify every event as `text`, `bytes`,
+`ignore`, or `unknown`; unknown events throw unless `unknownEvent: "ignore"` is
+chosen explicitly. Feed the resulting iterable directly to `parseStream`.
+
+```ts
+const signal = new AbortController().signal;
+const providerEvents = sdk.stream(request, { signal });
+const chunks = adaptProviderEvents(providerEvents, (event) =>
+  event.type === "text_delta"
+    ? { type: "text", value: event.text }
+    : { type: "unknown", reason: event.type },
+  { signal },
+);
+
+for await (const snapshot of parseStream(Result, chunks)) {
+  render(snapshot);
+}
+```
+
+Use the same `AbortSignal` when creating the provider stream and the adapter.
+On cancellation the adapter closes the upstream iterator; Yomi does not create
+transport timeouts. Authentication, retries, fallbacks, round robin, token
+accounting, and model selection are likewise provider/orchestrator concerns.
+The adapter only supplies chunks, so completion, reveal, validation, and
+diagnostic behavior remain exactly those of `createStreamParser`/`parseStream`.
+
 ## What It Fixes
 
 ### JSON Parsing
