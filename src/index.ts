@@ -10,7 +10,7 @@ import { runAdvisoryChecks, type AdvisoryReport } from "./advisory.js";
 export { Flag, type FlagWithContext } from "./flags.js";
 export { type CoerceResult, type CoerceSuccess, type CoerceFailure, type CoerceError } from "./types.js";
 export { JsonParseError } from "./parse.js";
-export { DEFAULT_PARSER_LIMITS, ResourceLimitError, type Diagnostic, type ParserLimits, type ParserOptions, type ParserBudget, type UnionTieBreaker } from "./diagnostics.js";
+export { DEFAULT_PARSER_LIMITS, ResourceLimitError, type Diagnostic, type ParserLimits, type ParserOptions, type ParserBudget, type StreamFieldPolicy, type UnionTieBreaker } from "./diagnostics.js";
 export { advisoryPolicyFingerprint, type AdvisoryCheck, type AdvisoryCheckOutcome, type AdvisoryReport, type AdvisoryStatus } from "./advisory.js";
 export { inspectCompletion, type CompletionNode, type CompletionState } from "./syntax.js";
 export { compileSchema, renderFormat, schemaFingerprint, SCHEMA_CONTRACT_VERSION, type CompiledNode, type CompiledSchema, type CompileSchemaOptions, type RenderFormatResult } from "./schema.js";

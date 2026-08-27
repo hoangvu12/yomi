@@ -27,12 +27,21 @@ export interface ParserLimits {
 
 export type UnionTieBreaker = "error" | "first";
 
+export interface StreamFieldPolicy {
+  /** Withhold the value (including containers and strings) until its lexical node is complete. */
+  reveal?: "complete";
+}
+
 export type ParserOptions<T = unknown> = {
   limits?: Partial<ParserLimits>;
   /** How materially different equal-cost union candidates are handled. Defaults to `error`. */
   unionTieBreaker?: UnionTieBreaker;
   /** Non-fatal checks, evaluated only after strict final Zod validation succeeds. */
   advisoryChecks?: readonly AdvisoryCheck<T>[];
+  /** Semantic streaming policies keyed by dot path. Use `*` for collection elements. */
+  fields?: Readonly<Record<string, StreamFieldPolicy>>;
+  /** Safe defaults hide unstable scalar tokens. */
+  atomic?: "safe-defaults" | "none";
 };
 
 export const DEFAULT_PARSER_LIMITS: Readonly<ParserLimits> = Object.freeze({
