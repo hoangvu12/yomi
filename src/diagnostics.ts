@@ -10,6 +10,8 @@ export interface Diagnostic {
   severity: DiagnosticSeverity;
   cost: number;
   evidence?: string;
+  /** Union candidate index, when this diagnostic describes candidate selection. */
+  candidate?: number;
 }
 
 export interface ParserLimits {
@@ -22,7 +24,13 @@ export interface ParserLimits {
   maxDiagnostics: number;
 }
 
-export type ParserOptions = { limits?: Partial<ParserLimits> };
+export type UnionTieBreaker = "error" | "first";
+
+export type ParserOptions = {
+  limits?: Partial<ParserLimits>;
+  /** How materially different equal-cost union candidates are handled. Defaults to `error`. */
+  unionTieBreaker?: UnionTieBreaker;
+};
 
 export const DEFAULT_PARSER_LIMITS: Readonly<ParserLimits> = Object.freeze({
   maxInputBytes: 1_048_576,
@@ -74,7 +82,21 @@ const COST: Partial<Record<Flag, number>> = {
   [Flag.ExtractedFromText]: 1,
   [Flag.DefaultUsed]: 2,
   [Flag.ExtraKeysIgnored]: 1,
+  [Flag.StringToNumber]: 2,
+  [Flag.StringToBool]: 2,
+  [Flag.NumberToString]: 2,
+  [Flag.BoolToString]: 2,
+  [Flag.FloatToInt]: 2,
+  [Flag.IntToFloat]: 2,
+  [Flag.NullToUndefined]: 2,
+  [Flag.EnumCaseInsensitive]: 2,
+  [Flag.SingleToArray]: 3,
+  [Flag.ArrayToSingle]: 3,
 };
+
+export function interpretationCost(flags: FlagWithContext[]): number {
+  return flags.reduce((total, item) => total + (COST[item.flag] ?? 1), 0);
+}
 
 export function diagnosticsFromFlags(flags: FlagWithContext[], limits: ParserLimits): Diagnostic[] {
   let retained = 0;

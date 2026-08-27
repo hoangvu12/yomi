@@ -62,6 +62,7 @@ export function createStreamParser<S extends z.ZodTypeAny>(
         const parsed = parseJson(buffer, limits);
         inspectValue(parsed.value, limits);
         const ctx = createContext(limits);
+        ctx.unionTieBreaker = options?.unionTieBreaker;
         ctx.flags.push(...parsed.flags);
         const result = coercePartialToSchema(schema, parsed.value, ctx);
         if (!result.success) return { success: false, pending: true, completion, error: result.error };
@@ -70,7 +71,7 @@ export function createStreamParser<S extends z.ZodTypeAny>(
           snapshot: {
             data: result.value as DeepPartial<z.infer<S>>,
             flags: result.flags,
-            diagnostics: diagnosticsFromFlags(result.flags, limits),
+            diagnostics: [...diagnosticsFromFlags(result.flags, limits), ...ctx.diagnostics].slice(0, limits.maxDiagnostics),
             completion,
             done: false,
             text: buffer,
@@ -89,12 +90,13 @@ export function createStreamParser<S extends z.ZodTypeAny>(
         const parsed = parseJson(buffer, limits);
         inspectValue(parsed.value, limits);
         const ctx = createContext(limits);
+        ctx.unionTieBreaker = options?.unionTieBreaker;
         ctx.flags.push(...parsed.flags);
         const result = coerceToSchema(schema, parsed.value, ctx);
         if (result.success) {
           const validated = schema.safeParse(result.value);
           if (validated.success) {
-            return { success: true, data: validated.data, flags: result.flags, diagnostics: diagnosticsFromFlags(result.flags, limits) };
+            return { success: true, data: validated.data, flags: result.flags, diagnostics: [...diagnosticsFromFlags(result.flags, limits), ...ctx.diagnostics].slice(0, limits.maxDiagnostics) };
           }
           const issue = validated.error.issues[0];
           return {
@@ -111,7 +113,7 @@ export function createStreamParser<S extends z.ZodTypeAny>(
         return {
           success: false,
           error: {
-            type: "coercion_error",
+            type: result.error.type === "ambiguity_error" ? "ambiguity_error" : "coercion_error",
             message: result.error.message,
             path: result.error.path,
             expected: result.error.expected,

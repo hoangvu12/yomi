@@ -11,7 +11,7 @@ describe("bounded structured diagnostics", () => {
     expect(result.data).toEqual({ count: 2 });
     expect(result.diagnostics.map(({ code, phase, severity, path, cost }) => ({ code, phase, severity, path, cost }))).toEqual([
       { code: "json_repaired", phase: "syntax", severity: "warning", path: [], cost: 1 },
-      { code: "string_to_number", phase: "coercion", severity: "warning", path: ["count"], cost: 1 },
+      { code: "string_to_number", phase: "coercion", severity: "warning", path: ["count"], cost: 2 },
     ]);
   });
 
