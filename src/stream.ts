@@ -6,6 +6,7 @@ import type { FlagWithContext } from "./flags.js";
 import type { ParseError, ParseResult } from "./index.js";
 import type { Diagnostic } from "./diagnostics.js";
 import { diagnosticsFromFlags, inspectValue, resolveLimits, ResourceLimitError, type ParserOptions } from "./diagnostics.js";
+import { inspectCompletion, type CompletionNode } from "./syntax.js";
 
 export type DeepPartial<T> =
   T extends readonly (infer U)[] ? DeepPartial<U>[] :
@@ -15,6 +16,8 @@ export interface StreamSnapshot<T> {
   data: DeepPartial<T>;
   flags: FlagWithContext[];
   diagnostics: Diagnostic[];
+  /** Lexical completion based only on delimiters emitted by the producer. */
+  completion: CompletionNode;
   /** Always false for push snapshots; only finish() can establish completeness. */
   done: false;
   text: string;
@@ -22,7 +25,7 @@ export interface StreamSnapshot<T> {
 
 export type StreamPushResult<T> =
   | { success: true; snapshot: StreamSnapshot<T> }
-  | { success: false; pending: true; error?: CoerceError }
+  | { success: false; pending: true; completion: CompletionNode; error?: CoerceError }
   | { success: false; pending: false; error: ParseError };
 
 export interface StreamParser<T> {
@@ -42,25 +45,33 @@ export function createStreamParser<S extends z.ZodTypeAny>(
 ): StreamParser<z.infer<S>> {
   const limits = resolveLimits(options);
   let buffer = "";
+  let receivedBytes = 0;
   const decoder = new TextDecoder();
 
   return {
     get text() { return buffer; },
     push(chunk) {
+      receivedBytes += typeof chunk === "string" ? new TextEncoder().encode(chunk).byteLength : chunk.byteLength;
+      if (receivedBytes > limits.maxInputBytes) {
+        const error = new ResourceLimitError("maxInputBytes", limits.maxInputBytes);
+        return { success: false, pending: false, error: { type: "resource_limit_error", message: error.message, budget: error.budget, limit: error.limit } };
+      }
       buffer += typeof chunk === "string" ? chunk : decoder.decode(chunk, { stream: true });
+      const completion = inspectCompletion(buffer);
       try {
         const parsed = parseJson(buffer, limits);
         inspectValue(parsed.value, limits);
         const ctx = createContext(limits);
         ctx.flags.push(...parsed.flags);
         const result = coercePartialToSchema(schema, parsed.value, ctx);
-        if (!result.success) return { success: false, pending: true, error: result.error };
+        if (!result.success) return { success: false, pending: true, completion, error: result.error };
         return {
           success: true,
           snapshot: {
             data: result.value as DeepPartial<z.infer<S>>,
             flags: result.flags,
             diagnostics: diagnosticsFromFlags(result.flags, limits),
+            completion,
             done: false,
             text: buffer,
           },
@@ -69,7 +80,7 @@ export function createStreamParser<S extends z.ZodTypeAny>(
         if (error instanceof ResourceLimitError) {
           return { success: false, pending: false, error: { type: "resource_limit_error", message: error.message, budget: error.budget, limit: error.limit } };
         }
-        return { success: false, pending: true };
+        return { success: false, pending: true, completion };
       }
     },
     finish() {

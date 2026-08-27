@@ -10,6 +10,7 @@ export { Flag, type FlagWithContext } from "./flags.js";
 export { type CoerceResult, type CoerceSuccess, type CoerceFailure, type CoerceError } from "./types.js";
 export { JsonParseError } from "./parse.js";
 export { DEFAULT_PARSER_LIMITS, ResourceLimitError, type Diagnostic, type ParserLimits, type ParserOptions, type ParserBudget } from "./diagnostics.js";
+export { inspectCompletion, type CompletionNode, type CompletionState } from "./syntax.js";
 export {
   createStreamParser,
   parseStream,
