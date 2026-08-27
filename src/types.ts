@@ -51,6 +51,8 @@ export interface CoerceContext {
   partial?: boolean;
   limits?: ParserLimits;
   candidates?: number;
+  /** Shared instrumentation across nested candidate contexts. */
+  work?: { candidateAttempts: number };
   diagnostics: Diagnostic[];
   unionTieBreaker?: import("./diagnostics.js").UnionTieBreaker;
 }
@@ -58,8 +60,8 @@ export interface CoerceContext {
 /**
  * Create a new coercion context.
  */
-export function createContext(limits?: ParserLimits): CoerceContext {
-  return { path: [], flags: [], diagnostics: [], limits, candidates: 0 };
+export function createContext(limits?: ParserLimits, work?: { candidateAttempts: number }): CoerceContext {
+  return { path: [], flags: [], diagnostics: [], limits, candidates: 0, work };
 }
 
 /**
@@ -72,6 +74,7 @@ export function childContext(ctx: CoerceContext, segment: string | number): Coer
     partial: ctx.partial,
     limits: ctx.limits,
     candidates: ctx.candidates,
+    work: ctx.work,
     diagnostics: ctx.diagnostics,
     unionTieBreaker: ctx.unionTieBreaker,
   };
