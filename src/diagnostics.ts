@@ -1,4 +1,5 @@
 import { Flag, type FlagWithContext } from "./flags.js";
+import type { AdvisoryCheck } from "./advisory.js";
 
 export type DiagnosticPhase = "syntax" | "coercion" | "validation" | "safety";
 export type DiagnosticSeverity = "info" | "warning" | "error";
@@ -22,7 +23,11 @@ export interface ParserLimits {
   maxDiagnostics: number;
 }
 
-export type ParserOptions = { limits?: Partial<ParserLimits> };
+export type ParserOptions<T = unknown> = {
+  limits?: Partial<ParserLimits>;
+  /** Non-fatal checks, evaluated only after strict final Zod validation succeeds. */
+  advisoryChecks?: readonly AdvisoryCheck<T>[];
+};
 
 export const DEFAULT_PARSER_LIMITS: Readonly<ParserLimits> = Object.freeze({
   maxInputBytes: 1_048_576,
@@ -44,7 +49,7 @@ export class ResourceLimitError extends Error {
   }
 }
 
-export function resolveLimits(options?: ParserOptions): ParserLimits {
+export function resolveLimits(options?: ParserOptions<any>): ParserLimits {
   const limits = { ...DEFAULT_PARSER_LIMITS, ...options?.limits };
   for (const [budget, value] of Object.entries(limits)) {
     if (!Number.isSafeInteger(value) || value < 0) {

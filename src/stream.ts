@@ -7,6 +7,7 @@ import type { ParseError, ParseResult } from "./index.js";
 import type { Diagnostic } from "./diagnostics.js";
 import { diagnosticsFromFlags, inspectValue, resolveLimits, ResourceLimitError, type ParserOptions } from "./diagnostics.js";
 import { inspectCompletion, type CompletionNode } from "./syntax.js";
+import { runAdvisoryChecks } from "./advisory.js";
 
 export type DeepPartial<T> =
   T extends readonly (infer U)[] ? DeepPartial<U>[] :
@@ -41,7 +42,7 @@ export interface StreamParser<T> {
  */
 export function createStreamParser<S extends z.ZodTypeAny>(
   schema: S,
-  options?: ParserOptions
+  options?: ParserOptions<z.infer<S>>
 ): StreamParser<z.infer<S>> {
   const limits = resolveLimits(options);
   let buffer = "";
@@ -94,7 +95,9 @@ export function createStreamParser<S extends z.ZodTypeAny>(
         if (result.success) {
           const validated = schema.safeParse(result.value);
           if (validated.success) {
-            return { success: true, data: validated.data, flags: result.flags, diagnostics: diagnosticsFromFlags(result.flags, limits) };
+            const advisory = runAdvisoryChecks(validated.data, options?.advisoryChecks, limits);
+            const diagnostics = [...diagnosticsFromFlags(result.flags, limits), ...advisory.checks.flatMap((check) => check.diagnostic ? [check.diagnostic] : [])].slice(0, limits.maxDiagnostics);
+            return { success: true, data: validated.data, flags: result.flags, diagnostics, advisory };
           }
           const issue = validated.error.issues[0];
           return {
@@ -134,7 +137,7 @@ export function createStreamParser<S extends z.ZodTypeAny>(
 export async function* parseStream<S extends z.ZodTypeAny>(
   schema: S,
   chunks: AsyncIterable<string | Uint8Array>,
-  options?: ParserOptions
+  options?: ParserOptions<z.infer<S>>
 ): AsyncGenerator<StreamSnapshot<z.infer<S>>, ParseResult<z.infer<S>>, void> {
   const parser = createStreamParser(schema, options);
   for await (const chunk of chunks) {
