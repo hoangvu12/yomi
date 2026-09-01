@@ -144,7 +144,25 @@ console.log(rendered.fingerprint);
 const contract = parserContractFingerprint(User, parserOptions);
 ```
 
-Rendering supports objects, collections, tuples, records, unions, literals, enums, optionality, nullability, descriptions, aliases, and recursive schemas through stable references. Unsupported constructs return compile diagnostics. Fingerprints cover the normalized schema and observable parser policies.
+Rendering supports objects, collections, tuples, records, unions, literals, enums, optionality, nullability, descriptions, aliases, and recursive schemas through stable references. Unsupported constructs return compile diagnostics. Fingerprints cover the normalized schema, its field order, and observable parser policies.
+
+### Field order
+
+Object fields render alphabetically by default. Pass `fieldOrder: "declared"` to render them in the order they were declared instead, which lets the prompt ask for fields in the order the model should think in—reasoning before the numbers it justifies, for example:
+
+```ts
+const Estimate = z.object({ reasoning: z.string(), kcal: z.number() });
+
+renderFormat(Estimate).format;
+// Return only JSON matching { "kcal": number, "reasoning": string }.
+
+renderFormat(Estimate, { fieldOrder: "declared" }).format;
+// Return only JSON matching { "reasoning": string, "kcal": number }.
+```
+
+The option applies to nested objects too, and is accepted by `compileSchema`, `schemaFingerprint`, and `parserContractFingerprint`. Field order is part of the fingerprint, so two orders of the same fields never share a contract identity. Parsing is unaffected—key order in model output never matters to the parser.
+
+`"sorted"` remains the default because the rendered text usually reaches a provider inside a cached request body; switching an existing schema to `"declared"` changes that text and invalidates those cached responses.
 
 ## Model-facing aliases and descriptions
 

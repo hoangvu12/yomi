@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
-import { compileSchema, parse, renderFormat, schemaFingerprint } from "../src/index.js";
+import { compileSchema, parse, parserContractFingerprint, renderFormat, schemaFingerprint } from "../src/index.js";
 
 describe("compiled schema graph and compact rendering", () => {
   it("compiles and caches by schema identity and metadata revision", () => {
@@ -51,5 +51,53 @@ describe("compiled schema graph and compact rendering", () => {
     const result = parse(schema, '{"value":"42"}');
     expect(compiled.diagnostics).toEqual([]);
     expect(result.success && result.data).toEqual({ value: 42 });
+  });
+});
+
+describe("field order", () => {
+  const pinned = z.object({
+    zebra: z.string(),
+    alpha: z.number().optional(),
+    nested: z.object({ delta: z.boolean(), beta: z.string().nullable() }),
+  });
+
+  it("sorts object fields alphabetically by default", () => {
+    const expected = 'Return only JSON matching { "alpha"?: number, "nested": { "beta": string | null, "delta": boolean }, "zebra": string }.';
+    expect(renderFormat(pinned).format).toBe(expected);
+    expect(renderFormat(pinned, { fieldOrder: "sorted" }).format).toBe(expected);
+  });
+
+  it("renders declaration order when asked, nested objects included", () => {
+    expect(renderFormat(pinned, { fieldOrder: "declared" }).format).toBe(
+      'Return only JSON matching { "zebra": string, "alpha"?: number, "nested": { "delta": boolean, "beta": string | null } }.',
+    );
+  });
+
+  it("caches compiled schemas separately per field order", () => {
+    expect(compileSchema(pinned, { fieldOrder: "declared" })).not.toBe(compileSchema(pinned));
+    expect(compileSchema(pinned, { fieldOrder: "declared" })).toBe(compileSchema(pinned, { fieldOrder: "declared" }));
+    expect(compileSchema(pinned, { fieldOrder: "sorted" })).toBe(compileSchema(pinned));
+  });
+
+  it("fingerprints field order, even when the fields are the same schema instances", () => {
+    const shared = z.string();
+    const a = z.object({ portion: shared, basis: shared, sourceId: shared });
+    const b = z.object({ basis: shared, sourceId: shared, portion: shared });
+
+    expect(renderFormat(a, { fieldOrder: "declared" }).format)
+      .not.toBe(renderFormat(b, { fieldOrder: "declared" }).format);
+    expect(schemaFingerprint(a, { fieldOrder: "declared" }))
+      .not.toBe(schemaFingerprint(b, { fieldOrder: "declared" }));
+
+    expect(renderFormat(a).format).toBe(renderFormat(b).format);
+    expect(schemaFingerprint(a)).toBe(schemaFingerprint(b));
+  });
+
+  it("separates the two orders in schema and parser contract fingerprints", () => {
+    expect(schemaFingerprint(pinned, { fieldOrder: "declared" })).not.toBe(schemaFingerprint(pinned));
+    expect(parserContractFingerprint(pinned, undefined, { fieldOrder: "declared" }))
+      .not.toBe(parserContractFingerprint(pinned));
+    expect(parserContractFingerprint(pinned, undefined, { fieldOrder: "sorted" }))
+      .toBe(parserContractFingerprint(pinned));
   });
 });

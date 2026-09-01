@@ -19,11 +19,23 @@ export type CompiledNode =
   | { id: string; kind: "nullable"; inner: string; description?: string }
   | { id: string; kind: "ref"; target: string; description?: string };
 
+/**
+ * How object fields are ordered when a schema is compiled and rendered.
+ *
+ * `"sorted"` orders fields alphabetically. `"declared"` keeps the order the fields were declared
+ * in, which is what the model reads and answers in.
+ */
+export type FieldOrder = "sorted" | "declared";
+
+const DEFAULT_FIELD_ORDER: FieldOrder = "sorted";
+
 export interface CompileSchemaOptions {
   /** Increment when application-owned schema metadata changes. */
   metadataRevision?: string | number;
   /** Parsing/streaming policies which affect the contract and fingerprint. */
   policies?: unknown;
+  /** Object field order in the compiled graph and rendered instructions. Defaults to `"sorted"`. */
+  fieldOrder?: FieldOrder;
 }
 
 export interface CompiledSchema {
@@ -46,6 +58,16 @@ function stable(value: unknown, seen = new WeakSet<object>()): string {
   return `{${Object.keys(value as object).sort().map((key) => `${JSON.stringify(key)}:${stable((value as Record<string, unknown>)[key], seen)}`).join(",")}}`;
 }
 
+/**
+ * `stable` sorts record keys, which would normalize object field order straight out of the
+ * fingerprint. Fields are canonicalized as an ordered array so that two orders of the same fields —
+ * which render differently — can never share one fingerprint. `CompiledNode` keeps the record shape.
+ */
+function hashable(nodes: Record<string, CompiledNode>): unknown {
+  return Object.fromEntries(Object.entries(nodes).map(([id, node]) =>
+    [id, node.kind === "object" ? { ...node, fields: Object.entries(node.fields) } : node]));
+}
+
 function hash(text: string): string {
   let h = 2166136261;
   for (let i = 0; i < text.length; i++) { h ^= text.charCodeAt(i); h = Math.imul(h, 16777619); }
@@ -53,7 +75,8 @@ function hash(text: string): string {
 }
 
 export function compileSchema(schema: z.ZodTypeAny, options: CompileSchemaOptions = {}): CompiledSchema {
-  const key = stable({ revision: options.metadataRevision ?? 0, policies: options.policies ?? null });
+  const fieldOrder = options.fieldOrder ?? DEFAULT_FIELD_ORDER;
+  const key = stable({ revision: options.metadataRevision ?? 0, policies: options.policies ?? null, fieldOrder });
   const existing = cache.get(schema)?.get(key);
   if (existing) return existing;
 
@@ -98,7 +121,8 @@ export function compileSchema(schema: z.ZodTypeAny, options: CompileSchemaOption
       case "object": {
         const fields: Record<string, { node: string; optional: boolean; aliases?: readonly string[] }> = {};
         const canonical = new Set(Object.keys(inspected.shape)); const seen = new Map<string, string>();
-        for (const name of Object.keys(inspected.shape).sort()) {
+        const declared = Object.keys(inspected.shape);
+        for (const name of fieldOrder === "sorted" ? [...declared].sort() : declared) {
           const child = inspected.shape[name]!;
           const aliases = getYomiMetadata(child).aliases;
           for (const alias of aliases ?? []) {
@@ -117,7 +141,7 @@ export function compileSchema(schema: z.ZodTypeAny, options: CompileSchemaOption
     throw new Error("Unreachable schema kind");
   };
   const root = visit(schema, []);
-  const normalized = stable({ contractVersion: SCHEMA_CONTRACT_VERSION, root, nodes, policies: options.policies ?? null, metadataRevision: options.metadataRevision ?? 0 });
+  const normalized = stable({ contractVersion: SCHEMA_CONTRACT_VERSION, root, nodes: hashable(nodes), policies: options.policies ?? null, metadataRevision: options.metadataRevision ?? 0, fieldOrder });
   const compiled: CompiledSchema = Object.freeze({ root, nodes: Object.freeze(nodes), diagnostics: Object.freeze(diagnostics), fingerprint: hash(normalized), contractVersion: SCHEMA_CONTRACT_VERSION });
   const entries = cache.get(schema) ?? new Map<string, CompiledSchema>(); entries.set(key, compiled); cache.set(schema, entries);
   return compiled;
@@ -154,6 +178,10 @@ export function renderFormat(schema: z.ZodTypeAny, options?: CompileSchemaOption
 export function schemaFingerprint(schema: z.ZodTypeAny, options?: CompileSchemaOptions): string { return compileSchema(schema, options).fingerprint; }
 
 /** Fingerprint the schema together with every parser policy that changes its contract. */
-export function parserContractFingerprint(schema: z.ZodTypeAny, options?: ParserOptions<any>): string {
-  return compileSchema(schema, { policies: parserContractPolicies(options) }).fingerprint;
+export function parserContractFingerprint(
+  schema: z.ZodTypeAny,
+  options?: ParserOptions<any>,
+  contract?: Omit<CompileSchemaOptions, "policies">,
+): string {
+  return compileSchema(schema, { ...contract, policies: parserContractPolicies(options) }).fingerprint;
 }
