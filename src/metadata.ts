@@ -4,12 +4,15 @@ const METADATA_KEY = "yomi";
 
 export interface YomiMetadata {
   aliases?: readonly string[];
+  /** Model-facing type name, used when an enum is hoisted into its own block. */
+  name?: string;
   enumAliases?: Readonly<Record<string, readonly string[]>>;
   enumValueDescriptions?: Readonly<Record<string, string>>;
 }
 
 export type YomiSchema<T extends z.ZodTypeAny> = T & {
   alias(...names: string[]): YomiSchema<T>;
+  named(name: string): YomiSchema<T>;
   valueAlias(value: string | number, ...names: string[]): YomiSchema<T>;
   valueDescription(value: string | number, description: string): YomiSchema<T>;
 };
@@ -29,6 +32,7 @@ function decorate<T extends z.ZodTypeAny>(schema: T): YomiSchema<T> {
   const target = schema as unknown as YomiSchema<T>;
   Object.defineProperties(target, {
     alias: { configurable: true, value: (...names: string[]) => yomi(withMetadata(schema, { aliases: [...(getYomiMetadata(schema).aliases ?? []), ...names] })) },
+    named: { configurable: true, value: (name: string) => yomi(withMetadata(schema, { name })) },
     valueAlias: { configurable: true, value: (value: string | number, ...names: string[]) => {
       const current = getYomiMetadata(schema); const key = String(value);
       return yomi(withMetadata(schema, { enumAliases: { ...current.enumAliases, [key]: [...(current.enumAliases?.[key] ?? []), ...names] } }));

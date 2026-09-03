@@ -11,7 +11,7 @@ Yomi does not make model requests, manage credentials, retry providers, or send 
 - Scores all eligible union candidates and reports ambiguity instead of silently relying on declaration order.
 - Produces completion-aware streaming snapshots from string or UTF-8 byte chunks.
 - Supports atomic values, reveal-on-completion, parent gating, state wrappers, immutable revisions, and semantic deduplication.
-- Generates compact model-facing output instructions from the same Zod schema used for parsing.
+- Renders the model-facing schema, single-line or multi-line, from the same Zod schema used for parsing.
 - Supports descriptions plus model-facing field and enum aliases without changing application output types.
 - Returns bounded structured diagnostics and enforces finite resource limits.
 - Runs optional named advisory checks without discarding otherwise valid data.
@@ -130,21 +130,26 @@ const result = parse(MyUnion, input, {
 
 Chosen and rejected candidates, costs, and validation evidence are available in diagnostics.
 
-## Generate output instructions
+## Render the schema into a prompt
 
-Generate compact prompt text from the parsing schema so prompts and runtime validation do not drift:
+Render the schema the model has to answer in, straight from the schema that will validate the answer, so prompts and runtime validation do not drift:
 
 ```ts
 import { renderFormat, parserContractFingerprint } from "@hoangvu12/yomi";
 
 const rendered = renderFormat(User);
-console.log(rendered.format);
-console.log(rendered.fingerprint);
+
+const prompt = `Summarize this ticket.
+
+Answer in JSON using this schema:
+${rendered.format}`;
 
 const contract = parserContractFingerprint(User, parserOptions);
 ```
 
-Rendering supports objects, collections, tuples, records, unions, literals, enums, optionality, nullability, descriptions, aliases, and recursive schemas through stable references. Unsupported constructs return compile diagnostics. Fingerprints cover the normalized schema, its field order, and observable parser policies.
+`format` is the schema and nothing else—no instruction sentence, no code fence. The wording that surrounds it is yours to write and tune, and yomi never edits a prompt out from under you.
+
+Rendering supports objects, collections, tuples, records, unions, literals, enums, optionality, nullability, descriptions, aliases, and recursive schemas through stable references. Unsupported constructs return compile diagnostics. Fingerprints cover the normalized schema, its field order, its layout, and observable parser policies.
 
 ### Field order
 
@@ -154,15 +159,61 @@ Object fields render alphabetically by default. Pass `fieldOrder: "declared"` to
 const Estimate = z.object({ reasoning: z.string(), kcal: z.number() });
 
 renderFormat(Estimate).format;
-// Return only JSON matching { "kcal": number, "reasoning": string }.
+// { "kcal": number, "reasoning": string }
 
 renderFormat(Estimate, { fieldOrder: "declared" }).format;
-// Return only JSON matching { "reasoning": string, "kcal": number }.
+// { "reasoning": string, "kcal": number }
 ```
 
 The option applies to nested objects too, and is accepted by `compileSchema`, `schemaFingerprint`, and `parserContractFingerprint`. Field order is part of the fingerprint, so two orders of the same fields never share a contract identity. Parsing is unaffected—key order in model output never matters to the parser.
 
 `"sorted"` remains the default because the rendered text usually reaches a provider inside a cached request body; switching an existing schema to `"declared"` changes that text and invalidates those cached responses.
+
+### Layout
+
+The rendered contract is one line by default. Three independent options change how it reads without changing what it says, so each can be adopted—and measured—on its own.
+
+Pass `multiline: true` to break objects one field per line. Descriptions and a single-line schema fight each other: the more guidance a schema carries, the harder that line is to scan, and a model looking for `basisKcal` has to count commas to find it.
+
+```ts
+const Estimate = z.object({
+  reasoning: z.string().describe("Work through the portion before committing to numbers"),
+  items: z.array(z.object({ name: z.string(), portionGrams: z.number() })),
+});
+
+renderFormat(Estimate, { fieldOrder: "declared", multiline: true }).format;
+// {
+//   "reasoning": string /* Work through the portion before committing to numbers */,
+//   "items": {
+//     "name": string,
+//     "portionGrams": number
+//   }[]
+// }
+```
+
+Pass `hoistEnums` to lift enums out of the schema body into named blocks above it. `"described"` hoists only the enums carrying value descriptions—the ones whose inline comments otherwise bury the field they sit on—and `"always"` hoists every enum. An enum shared by several fields is defined once and referenced by name at each site. Blocks are separated from the schema by a blank line, so `format` stays one block of text you can drop into a prompt.
+
+```ts
+const Confidence = yomi(z.enum(["high", "low"]).describe("Evidence strength"))
+  .valueDescription("high", "Directly measured")
+  .valueDescription("low", "Largely guessed");
+
+renderFormat(z.object({ confidence: Confidence }), { hoistEnums: "described" }).format;
+// enum Confidence { "high" /* Directly measured */, "low" /* Largely guessed */ } /* Evidence strength */
+//
+// { "confidence": Confidence }
+```
+
+A hoisted enum is named by `yomi().named("EvidenceGrade")` when given, otherwise from the first field that reaches it (`confidence` becomes `Confidence`), with a numeric suffix if two enums would collide. Literals are never hoisted.
+
+Pass `orSplitter: "or"` to separate union options, nullable types, and inline enum values with plain English instead of `|`, which some models read more reliably:
+
+```ts
+renderFormat(z.object({ note: z.string().nullable() }), { orSplitter: "or" }).format;
+// { "note": string or null }
+```
+
+Layout is part of `renderFormat`'s fingerprint, so two layouts of the same schema never share a contract identity. Every default reproduces the original single-line text byte for byte, and the default fingerprint stays equal to `schemaFingerprint`—an existing prompt is unaffected until a layout is asked for. Layout does not reach `compileSchema`, `schemaFingerprint`, or `parserContractFingerprint`, which describe the schema and the parser rather than the presentation.
 
 ## Model-facing aliases and descriptions
 
@@ -183,7 +234,7 @@ const Job = z.object({
 });
 ```
 
-Canonical names win when canonical and aliased keys both appear. Alias collisions are compile diagnostics, and aliases are always literal keys—not executable property paths.
+Canonical names win when canonical and aliased keys both appear. Alias collisions are compile diagnostics, and aliases are always literal keys—not executable property paths. `.named()` sets the model-facing type name an enum is given when [hoisted](#layout).
 
 ## Advisory checks
 
